@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .groups import (
+    as_list, areas_of, EA_cols,
     c_aggs, EA_TO_COUNTRY, DCIIA_TYPES, DH_DCIIA_TYPES, ANALYSIS_YEAR,
     NUCLEAR_PT, NUCLEAR_IDS, PT_RENAME, STATES,
 )
@@ -29,9 +30,9 @@ HOURS_PER_YEAR = 8760.0
 def _resolve_region(ea, country):
     """(ea | country) -> (tuple of EAs, label). Fails loudly on an unknown country."""
     if country is not None:
-        if country not in c_aggs:
-            raise KeyError(f"unknown country {country!r}; known: {sorted(c_aggs)}")
-        return tuple(c_aggs[country]), country
+        if country not in c_aggs and country not in EA_cols:
+            raise KeyError(f"unknown region {country!r}: use one of {sorted(c_aggs)} or a zone")
+        return areas_of(country), country
     if ea is None:
         raise ValueError("pass ea= or country=")
     return (ea,), ea
@@ -358,7 +359,7 @@ def _widen(res, vals, deltas, label, ndigits, *, keep_if):
 
 def _capture_summary(ctx, spec, ea, country, years, pts):
     target, label = _resolve_region(ea, country)
-    want = list(pts) if pts is not None else list(spec.pts)
+    want = as_list(pts) if pts is not None else list(spec.pts)
     out = []
     for state in STATES:
         sup = _supply_in(ctx, spec, state, target, years, label)
@@ -376,7 +377,7 @@ def _capture_summary(ctx, spec, ea, country, years, pts):
 
 def _capacity_factor_summary(ctx, spec, ea, country, years, pts):
     target, label = _resolve_region(ea, country)
-    want = list(pts) if pts is not None else list(spec.pts)
+    want = as_list(pts) if pts is not None else list(spec.pts)
     out = []
     for state in STATES:
         sup = _supply_in(ctx, spec, state, target, years, label)
@@ -432,8 +433,8 @@ def _region_of(wide, region):
 
 def print_price_summary(ctx, *, eas=(), countries=(), years=ANALYSIS_YEAR):
     """Price moments and scarcity hours, one block of baseline/shock rows per area."""
-    frames = ([full_summary(ctx, ea=e, years=years) for e in eas]
-              + [full_summary(ctx, country=c, years=years) for c in countries])
+    frames = ([full_summary(ctx, ea=e, years=years) for e in as_list(eas) or []]
+              + [full_summary(ctx, country=c, years=years) for c in as_list(countries) or []])
     df = pd.concat(frames)
     df.index = [f"{area_label(r)}, {STATE_SHORT[s]}" for r, s in df.index]
     cols = ["mean", "min", "max", "std", "skew", "exkurt", "nulpristime", "mangeltime"]
@@ -448,7 +449,7 @@ def print_price_summary(ctx, *, eas=(), countries=(), years=ANALYSIS_YEAR):
 
 def print_trade_summary(ctx, *, countries=("DK",), years=ANALYSIS_YEAR):
     """Trade by partner per country: export, import and net (TWh), net value (mio. kr.)."""
-    for country in countries:
+    for country in as_list(countries):
         ts = full_trade_summary(ctx, country=country, years=years)
         partners = [p for p in ts.index.get_level_values("partner").unique() if p != "TOTAL"]
         rows = {}

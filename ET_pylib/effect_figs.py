@@ -14,7 +14,7 @@ import pandas as pd
 
 from .groups import (
     STATES, REGION_ORDER, PARTNER_ORDER, PT_AGGS, PT_DROP, PT_AGG_ORDER,
-    NX_COMP_AGGS, NX_COMP_ORDER, WELFARE_SERIES, ANALYSIS_YEAR, c_aggs,
+    NX_COMP_AGGS, NX_COMP_ORDER, WELFARE_SERIES, ANALYSIS_YEAR, as_list, areas_of,
 )
 from .style import (
     FIG_TEXT, FIGSIZE_WIDE, STATE_COLORS, STATE_LABELS, DELTA_COLORS, PT_AGG_COLORS,
@@ -34,14 +34,14 @@ from .plot_base import (
 
 def price_levels(ctx, regions=None, *, years=ANALYSIS_YEAR):
     """`price_summary` stacked over regions, indexed by (region, run)."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
     return pd.concat([price_summary(ctx, country=r, years=years) for r in regions])
 
 
 def trade_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net"):
     """All-partner trade totals per region, indexed by (region, run), columns TWh /
     bnDKK. `component`: "net", "export" or "import"."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
     rows = []
     for region in regions:
         tot = full_trade_summary(ctx, country=region, years=years).loc["TOTAL"]
@@ -57,7 +57,7 @@ def trade_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net"):
 def trade_delta_by_partner(ctx, regions=None, *, years=ANALYSIS_YEAR,
                            component="net", value=False):
     """Shock - baseline trade per region x partner; TWh, or mia. kr. if `value`."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
     col = f"{component}_{'mDKK' if value else 'TWh'}"
     scale = 1e-3 if value else 1.0
     rows = {}
@@ -73,13 +73,13 @@ def trade_delta_by_partner(ctx, regions=None, *, years=ANALYSIS_YEAR,
 def nx_delta_by_pt(ctx, share_dict, regions=None, *, years=ANALYSIS_YEAR):
     """Shock - baseline net export per region x supply component (TWh). Exports
     carry the origin zone's supply mix, imports the partner zone's."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
     yrs = [years] if isinstance(years, int) else list(years)
     comp = list(share_dict["baseline"].columns)
 
     rows = {}
     for region in regions:
-        members = set(c_aggs[region])
+        members = set(areas_of(region))
         net = pd.Series(0.0, index=comp)
         for state, sign in (("shock", 1.0), ("baseline", -1.0)):
             nx = ctx.NX_dict[state].reset_index()
@@ -121,11 +121,11 @@ def capture_delta_by_pt(ctx, *, country="DK", years=ANALYSIS_YEAR, min_gen=100.0
 def _stack_frame(fn, baseline_output, shock_output, *, id2Pt, id2EA, regions, year,
                  base_col, shock_col, scale):
     """{state: frame region x PT_AGG_ORDER}, nuclear split out of CD."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
     out = {s: {} for s in STATES}
     for region in regions:
         df = fn(baseline_output, shock_output, id2Pt=id2Pt, id2EA=id2EA,
-                areas=c_aggs[region], year=year, split_nuclear=True).droplevel("t")
+                areas=areas_of(region), year=year, split_nuclear=True).droplevel("t")
         out["baseline"][region] = _pt_agg(df[base_col], what=f"{fn.__name__}/{region}") * scale
         out["shock"][region] = _pt_agg(df[shock_col], what=f"{fn.__name__}/{region}") * scale
     return {k: pd.DataFrame(v).T.loc[regions, PT_AGG_ORDER] for k, v in out.items()}
@@ -359,7 +359,7 @@ def plot_price_delta(ctx, regions=None, *, years=ANALYSIS_YEAR, stats=("mean",),
                      save_path=None, show=True, verbose=False):
     """Shock - baseline price by region, one panel per `price_summary` statistic."""
     df = price_levels(ctx, regions, years=years) / 10.0   # DKK/MWh -> øre/kWh
-    stats = (stats,) if isinstance(stats, str) else tuple(stats)
+    stats = as_list(stats)
 
     fig, axes = new_figure(1, len(stats), figsize=figsize, squeeze=False)
     axes = axes.ravel()

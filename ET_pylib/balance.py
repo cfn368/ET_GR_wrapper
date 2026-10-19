@@ -22,6 +22,7 @@ from typing import Mapping
 import pandas as pd
 
 from .groups import (
+    expand_areas,
     _META_BUILD, _FULL_ORDER, _META_BUILD_HA, _FULL_ORDER_HA,
     CLAMP_SUPPLY, CLAMP_DEMAND, SPLIT_COLS, CLAMP_SUPPLY_HA, CLAMP_DEMAND_HA,
     PT_RENAME, CTYPE_RENAME, DCIIA_TYPES, NUCLEAR_IDS, STATE_BASE, STATE_SHOCK, c_aggs,
@@ -357,6 +358,7 @@ def build_el_balance_data_country(baseline_output, shock_output=None, *,
                                   nuclear_ids=NUCLEAR_IDS, country_areas=c_aggs["DK"],
                                   country_label="DK", years=None) -> ElBalanceContext:
     """Denmark-wide counterpart of `build_el_balance_data` (DK1 + DK2 + DK3)."""
+    country_areas = expand_areas(country_areas)
     db_dict = _db_dict(baseline_output, shock_output)
     supply_dict, demand_dict, NX_dict = {}, {}, {}
 

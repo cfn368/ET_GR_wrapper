@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .groups import (
+    as_list,
     META_COLS, META_COLS_HA, COL_ORDER, PT_COLS, EA_ORDER, EA_cols, NUCLEAR_PT,
     STATE_BASE, STATES, c_aggs_countries,
 )
@@ -345,6 +346,7 @@ def build_nx_by_pt_agg(nx_dict, share_dict, ea, partners, *, partner_map=None,
                        partner_label="ALL"):
     """Net export EA -> all `partners`, summed per hour and component; each
     partner's import flow is split with its own mix before the sum."""
+    partners = as_list(partners)
     comp = list(share_dict[STATE_BASE].columns)
     per_partner = {p: build_nx_by_pt(nx_dict, share_dict, ea, p, partner_map=partner_map)
                    for p in partners}

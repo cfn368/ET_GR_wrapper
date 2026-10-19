@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
-from .groups import DCIIA_TYPES, AREAS_WITHOUT_DCIIA, ANALYSIS_YEAR, STATES, c_aggs
+from .groups import (
+    DCIIA_TYPES, AREAS_WITHOUT_DCIIA, ANALYSIS_YEAR, STATES, as_list, areas_of, expand_areas,
+)
 from .style import (
     FIG_TEXT, SCATTER_COLOR, SCATTER_NEUTRAL, ZERO_LINE, MISSING_COLOR,
     area_colors, col_names, color_of, label_of,
@@ -53,7 +55,7 @@ def _state_prices(sup, ea, year):
 def _agg_state_prices(sup, members, year, weight_col=None):
     """State prices averaged over several areas per state h: simple mean, or weights
     from `weight_col` in the baseline frame (fixed, so dp is a pure price effect)."""
-    members = list(members)
+    members = list(expand_areas(members))
     parts = {ea: _state_prices(sup, ea, year) for ea in members}
 
     hours = parts[members[0]]["hours"]
@@ -184,7 +186,7 @@ def plot_price_change_scatter(ctx, areas, *, years=None, aggregates=None, weight
         years = sorted(sup["baseline"]["t"].unique())
     elif isinstance(years, int):
         years = [years]
-    areas = [areas] if isinstance(areas, str) else list(areas)
+    areas = as_list(areas)
 
     n = len(areas)
     ncols = 1 if n == 1 else ncols
@@ -242,8 +244,8 @@ def plot_price_change_and_cs(ctx, baseline_output, shock_output, region="DK", *,
     both on the same equal-hour bins of the region's aggregate price. `members`
     defaults to the region's areas with final demand."""
     year = ANALYSIS_YEAR if year is None else year
-    members = (list(members) if members is not None
-               else [ea for ea in c_aggs[region] if ea not in AREAS_WITHOUT_DCIIA])
+    members = (list(expand_areas(members)) if members is not None
+               else [ea for ea in areas_of(region) if ea not in AREAS_WITHOUT_DCIIA])
 
     t_vals = ctx.supply_dict["baseline"]["t"]
     t_year = t_vals[t_vals.astype(int) == int(year)].iloc[0]   # dtype of t in supply_dict

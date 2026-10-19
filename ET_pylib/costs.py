@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .groups import NUC_ID_BY_EA, NUCLEAR_IDS, NUCLEAR_PT, c_aggs
+from .groups import NUC_ID_BY_EA, NUCLEAR_IDS, NUCLEAR_PT, c_aggs, as_list, expand_areas
 from .style import STATE_SHORT, dk_num, label_of, area_label, print_table
 from ._util import sym_year, id_map
 
@@ -62,7 +62,8 @@ def nuc_wind_swap(baseline, shock, yr, dk=("DK1", "DK2"), wind=("WS",), verbose=
                   nuc_ids=None):
     """Nuclear capacity added vs. offshore wind displaced in `yr`.
     Returns (nuc, cut): per-id frames of GW."""
-    nuc_ids = list(NUC_ID_BY_EA.values()) if nuc_ids is None else list(nuc_ids)
+    nuc_ids = list(NUC_ID_BY_EA.values()) if nuc_ids is None else as_list(nuc_ids)
+    dk, wind = expand_areas(dk), as_list(wind)
     xs = lambda db, sym: sym_year(db, sym, yr).astype("float64")
     b, s, hcap = xs(baseline, "ECap"), xs(shock, "ECap"), xs(shock, "HCap")
     pt, ea = id_map(shock("id2Pt")), id_map(shock("id2EA"))
@@ -88,6 +89,7 @@ def nuc_wind_swap(baseline, shock, yr, dk=("DK1", "DK2"), wind=("WS",), verbose=
 def print_swap(nuc, cut, yr, wind=("WS",)):
     """Capacity-swap table (GW): nuclear added per area, wind removed per area, totals."""
     nuc_label = label_of(NUCLEAR_PT)
+    wind = as_list(wind)
     wind_label = label_of(wind[0]) if len(wind) == 1 else "Vind"
     rows = {f"{nuc_label} {r.EA}": [r.GW_base, r.GW_added, r.GW_added - r.GW_base]
             for _, r in nuc.sort_values("EA").iterrows()}
@@ -291,7 +293,7 @@ def lcoe_inputs(db, *, year, areas=c_aggs["DK"], nuc_ids=None):
     ea = tech_of.index.map(ea_of)
     if pd.isna(ea).any():
         raise KeyError(f"ids without EA: {tech_of.index[pd.isna(ea)].tolist()}")
-    tech_of = tech_of[ea.isin(areas)]
+    tech_of = tech_of[ea.isin(expand_areas(areas))]
     if "KK" not in tech_of.values:
         raise KeyError(f"no nuclear ids ({sorted(nuc)}) in {areas} in {year} -- is db the nuclear shock?")
     ids = tech_of.index

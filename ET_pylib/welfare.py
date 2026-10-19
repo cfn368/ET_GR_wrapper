@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .groups import (
+    as_list, areas_of, expand_areas,
     c_aggs, EA_TO_COUNTRY, SCAND_ZONES, NUCLEAR_IDS, PT_RENAME, HEAT_PTS,
     ANALYSIS_YEAR, REGION_ORDER, NUC_ID_BY_EA,
 )
@@ -35,6 +36,7 @@ DK = c_aggs["DK"]
 
 def _scope(vals, ea, areas, *, what):
     """Keep (t, id) rows whose id sits in `areas`. Raises on any unmapped id."""
+    areas = expand_areas(areas)
     if areas is None:
         return vals
     if ea is None:
@@ -80,7 +82,7 @@ def _trapezoid(q0, q1, dp, *, sign, scale):
 def _countries_in(region):
     """Countries whose zones make up `region`, deduplicated, order-stable."""
     seen = []
-    for ea in c_aggs[region]:
+    for ea in areas_of(region):
         c = EA_TO_COUNTRY.get(ea)
         if c is None:
             raise KeyError(f"{ea} has no country in EA_TO_COUNTRY")
@@ -249,8 +251,7 @@ def _cs_core(qD0, qD1, p0, p1, area_col, *, year, areas, scale, label):
 def consumer_surplus(baseline, shock, *, year, areas=DK, markets=("E", "H"), scale=1e-3):
     """ΔCS by market and area. markets=("E",) for areas without a district-heat
     market. Returns (by market x area, by market, with total row, per-(h, area) detail)."""
-    if isinstance(areas, str):
-        areas = (areas,)
+    areas, markets = expand_areas(areas), as_list(markets)
     spec = {"E": ("qDemandE_DCIIA", "pE", "EA"), "H": ("qDemandH_DCIIA", "pH", "HA")}
     parts = [
         _cs_core(baseline[q].vals, shock[q].vals, baseline[p].vals, shock[p].vals,
@@ -268,8 +269,8 @@ def consumer_surplus(baseline, shock, *, year, areas=DK, markets=("E", "H"), sca
 def print_cs_table(baseline, shock, *, year, regions=None, scale=1.0):
     """ΔCS table (electricity) by zone, with country subtotals and a grand total.
     `regions` is {country code: zones}; default DK, NO and SE."""
-    if regions is None:
-        regions = {c: c_aggs[c] for c in ("DK", "NO", "SE")}
+    if not isinstance(regions, dict):
+        regions = {c: areas_of(c) for c in as_list(regions or ("DK", "NO", "SE"))}
     cols = ["dCS", "price_effect", "quantity_effect"]
     grand = pd.Series(0.0, index=cols)
     rows, rules = {}, []
@@ -295,14 +296,14 @@ def cs_by_price_bin(baseline_output, shock_output, regions=None, *,
                     year=ANALYSIS_YEAR, n_bins=5, cs_scale=1.0):
     """ΔCS per region x equal-hour bin of the baseline price. Each zone is binned
     on its own price (hWeight hours); bin k sums the zones' k-th bins."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
     hw = baseline_output("hWeight")
     p0 = filter_years(baseline_output("pE"), year, what="pE").droplevel("t")
 
     rows = {}
     for region in regions:
         detail = consumer_surplus(baseline_output, shock_output, year=year,
-                                  areas=c_aggs[region], markets=("E",), scale=cs_scale)[3]
+                                  areas=areas_of(region), markets=("E",), scale=cs_scale)[3]
         acc = np.zeros(n_bins)
         for ea, g in detail.groupby("area"):
             dcs = g.groupby("h")["dCS"].sum()
@@ -322,7 +323,7 @@ def cs_by_agg_price_bin(baseline_output, shock_output, d, region, members, *,
     of the region). Every hour h lands in one bin for the whole region, so the
     bars line up with the binned means of the price scatter."""
     detail = consumer_surplus(baseline_output, shock_output, year=year,
-                              areas=list(members), markets=("E",), scale=cs_scale)[3]
+                              areas=expand_areas(members), markets=("E",), scale=cs_scale)[3]
     dcs = detail.groupby("h")["dCS"].sum()
 
     bins = equal_hour_bins(d["baseline"], d["hours"], n_bins)
@@ -444,7 +445,7 @@ def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
 def print_flex(db, *, year, u_mins=(1.0,), syscost=NUC_SYSCOST_ORE_KWH):
     """`nuc_flex_value` per minimum load: one table per u_min, plants then total."""
     ea_of = {i: ea for ea, i in NUC_ID_BY_EA.items()}
-    for u in u_mins:
+    for u in as_list(u_mins):
         f = nuc_flex_value(db, year=year, u_min=u, syscost=syscost)
         f.index = [TOTAL_LABEL if i == "total" else f"{label_of('Nuclear')} {ea_of.get(i, i)}"
                    for i in f.index]
@@ -463,13 +464,14 @@ def welfare_levels(baseline_output, shock_output, *, id2Pt=None, id2EA=None, reg
                    include_ci=True, annuity=None):
     """ΔCS / ΔPS / ΔCI / annuity / net per region (mia. kr.). `annuity` is
     {country: mio. kr./yr}; a region without its own key sums its countries."""
-    regions = list(REGION_ORDER) if regions is None else list(regions)
+    regions = list(REGION_ORDER) if regions is None else as_list(regions)
+    markets = as_list(markets)
     ci = _ci_delta_by_country(baseline_output, shock_output, year) if include_ci else None
     ann = {} if annuity is None else dict(annuity)
 
     rows = []
     for region in regions:
-        areas = c_aggs[region]
+        areas = areas_of(region)
         countries = _countries_in(region)
 
         _, _, total, _ = consumer_surplus(baseline_output, shock_output, year=year,
@@ -543,7 +545,7 @@ def welfare_block(baseline_output, shock_output, *, year, deltas=None, annuity=N
                          "with the intended rate (annuity_by_tech(..., r=...))")
 
     scale = UNIT_SCALE[unit]
-    regions = list(regions)
+    regions, markets = as_list(regions), as_list(markets)
     id2Pt = shock_output["id2Pt"].vals if id2Pt is None else id2Pt
     id2EA = shock_output["id2EA"].vals if id2EA is None else id2EA
     rates, twh = dict(rates or {}), dict(twh or {})
@@ -600,7 +602,7 @@ def welfare_block(baseline_output, shock_output, *, year, deltas=None, annuity=N
             q = twh.get(spec.key, {}).get(region)
             if q is None:
                 q = syscost_twh(baseline_output, shock_output, spec, year=year,
-                                areas=c_aggs[region], id2Pt=id2Pt, id2EA=id2EA)
+                                areas=areas_of(region), id2Pt=id2Pt, id2EA=id2EA)
             if has_nuc and spec.key == "nuc_syscost":
                 q += float(flex["dTWh"])
             used_twh[spec.key][region] = float(q)
@@ -654,8 +656,8 @@ def print_welfare_blocks(blocks, *, regions=None, dec=2):
     if regions is None:
         regions = [r for r in blocks[names[0]].columns
                    if all(r in b.columns for b in blocks.values())]
-    elif isinstance(regions, str):
-        regions = [regions]
+    else:
+        regions = as_list(regions)
 
     fmt = f"+,.{dec}f"
     for region in regions:

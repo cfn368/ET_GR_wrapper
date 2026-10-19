@@ -42,6 +42,29 @@ c_aggs_countries = {k: v for k, v in c_aggs.items() if k != "Scandi"}
 EA_TO_COUNTRY    = {ea: c for c, eas in c_aggs_countries.items() for ea in eas}
 SCAND_ZONES      = c_aggs["Scandi"]
 
+def as_list(x):
+    """A single value (str, number) as [x], an iterable as a list, None as None, so
+    every multi-value argument also takes one value."""
+    if x is None:
+        return None
+    if isinstance(x, (str, bytes)) or not hasattr(x, "__iter__"):
+        return [x]
+    return list(x)
+
+
+def areas_of(region):
+    """Zones behind a region: an aggregate ("DK", "Scandi") gives its members, any
+    other name (a zone such as "DK1") is taken as a region of one."""
+    return tuple(c_aggs[region]) if region in c_aggs else (region,)
+
+
+def expand_areas(areas):
+    """Zones behind one or more areas, aggregates expanded; None stays None."""
+    if areas is None:
+        return None
+    return tuple(ea for a in as_list(areas) for ea in areas_of(a))
+
+
 # Trade partners: country aggregates plus every other area on its own.
 _SINGLE_AREAS = [ea for ea in EA_ORDER if ea not in EA_TO_COUNTRY]
 PARTNER_MAP   = {**c_aggs_countries, **{ea: (ea,) for ea in _SINGLE_AREAS}}

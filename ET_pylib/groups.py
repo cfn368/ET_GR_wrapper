@@ -1,31 +1,21 @@
-"""Naming, colours and style constants for the GreenREFORM energy module (KF26).
+"""
+Sets and conventions — the model vocabulary of the KF26 wrapper
+================================================================
 
-Code and column keys stay English; everything *rendered* is Danish.
-Section order: sets -> labels -> colours -> column conventions -> style.
+Areas, country aggregates, plant- and consumption-type renames, nuclear ids and
+the column conventions of the balance frames. Data only: everything rendered
+(labels, colours, figure text) lives in `style`.
 """
 
 from __future__ import annotations
 
-import matplotlib.pyplot as plt
 
+# ==================== ==================== ==================== ====================
+# 1. states and areas
 
-# =========================================================================== #
-# 1. sets and aggregates
-# =========================================================================== #
-STATE_BASE = "baseline"          # dict-nøgler fra build-laget -- rør dem ikke
+STATE_BASE  = "baseline"
 STATE_SHOCK = "shock"
-STATES = (STATE_BASE, STATE_SHOCK)
-
-STATE_BASE_LABEL = "Basisforløb"
-DEFAULT_SCENARIO = "stød"        # generisk -- et glemt argument er synligt, ikke forkert
-
-SCENARIO_LABELS = {
-    "stød":   "Stødforløb",
-    "nuc":    "Kernekraftforløb",
-    "transm": "Kabelforløb",
-    "wind":   "Vindforløb",
-    "demand": "Efterspørgselsforløb",
-}
+STATES      = (STATE_BASE, STATE_SHOCK)
 
 # Electricity areas of the disaggEA geography, in display order. No ROW in KF26.
 EA_ORDER = [
@@ -40,66 +30,76 @@ EA_ORDER = [
 ]
 EA_cols = set(EA_ORDER)
 
-# Country aggregates. `c_aggs` includes Scandi; `c_aggs_countries` does not --
-# use the latter anywhere a zone must map to exactly one country (e.g. the
-# partner relabel in summaries), or every Nordic zone collapses to "Scandi".
-# DK3 is Energiø Bornholm and counts as Denmark.
+# `c_aggs` includes Scandi; `c_aggs_countries` does not -- use the latter wherever
+# a zone must map to exactly one country. DK3 is Energiø Bornholm and counts as DK.
 c_aggs = {
-    "DK": ("DK1", "DK2", "DK3"),
-    "NO": ("NOS", "NON", "NOM"),
-    "SE": ("SE1", "SE2", "SE3", "SE4"),
+    "DK":     ("DK1", "DK2", "DK3"),
+    "NO":     ("NOS", "NON", "NOM"),
+    "SE":     ("SE1", "SE2", "SE3", "SE4"),
     "Scandi": ("DK1", "DK2", "DK3", "NOS", "NON", "NOM", "SE1", "SE2", "SE3", "SE4"),
 }
 c_aggs_countries = {k: v for k, v in c_aggs.items() if k != "Scandi"}
-EA_TO_COUNTRY = {ea: c for c, eas in c_aggs_countries.items() for ea in eas}
+EA_TO_COUNTRY    = {ea: c for c, eas in c_aggs_countries.items() for ea in eas}
+SCAND_ZONES      = c_aggs["Scandi"]
 
 # Trade partners: country aggregates plus every other area on its own.
 _SINGLE_AREAS = [ea for ea in EA_ORDER if ea not in EA_TO_COUNTRY]
-PARTNER_MAP = {**c_aggs_countries, **{ea: (ea,) for ea in _SINGLE_AREAS}}
+PARTNER_MAP   = {**c_aggs_countries, **{ea: (ea,) for ea in _SINGLE_AREAS}}
 
-# --- KF26 renames applied by the build layer --- #
+ANALYSIS_YEAR = 2040
+
+
+# ==================== ==================== ==================== ====================
+# 2. plant and consumption types
+
 # `EV` is both a plant type (vehicle-to-grid storage) and a consumption type
 # (transport demand abroad). The plant is renamed before supply and demand meet.
-PT_RENAME = {"EV": "EV_V2G"}
+PT_RENAME    = {"EV": "EV_V2G"}
 # Danish road transport is `transport`, abroad it is `EV`: one reporting category.
 CTYPE_RENAME = {"transport": "EV", "EVStorage": "EV_V2G_charge"}
 
-# Final consumers (the DC-IIA classes) after CTYPE_RENAME. Their sum is
-# qDemandE_DCIIA; distribution loss and the regional price weight use them.
-DCIIA_TYPES = ("classic", "hsdc", "EV", "HP")
-DH_DCIIA_TYPES = ("district_heat",)      # heat-side counterpart (qDemandH_DCIIA)
+# Final consumers (the DC-IIA classes) after CTYPE_RENAME; their sum is qDemandE_DCIIA.
+DCIIA_TYPES    = ("classic", "hsdc", "EV", "HP")
+DH_DCIIA_TYPES = ("district_heat",)
+AREAS_WITHOUT_DCIIA = ("DK3",)       # no final demand: left out of regional price weights
 
-# Default analysis year.
-ANALYSIS_YEAR = 2040
+# Heat-only types: UP per heat capacity, no ECap.
+HEAT_PTS = {"BH", "EPH", "SH", "HS"}
 
-# --- nuclear --- #
-# The nuclear shock adds its own CD plants (kf26_added_plants). id -> first year
-# the id is nuclear. Keep in sync with NUC_IDS / NUC_START in ET_shocks.nucShock.
-NUCLEAR_PT = "Nuclear"
+
+def _members(m):
+    """Bucket members as tuples -- a bare string would iterate as characters."""
+    return {k: (v,) if isinstance(v, str) else tuple(v) for k, v in m.items()}
+
+
+# ==================== ==================== ==================== ====================
+# 3. nuclear
+
+# The nuclear shock adds its own CD plants through DREAM's added-plant machinery.
+# NUC_ID_BY_EA is read by ET_shocks.nucShock; NUCLEAR_IDS maps id -> first nuclear year.
+NUCLEAR_PT        = "Nuclear"
+NUC_ID_BY_EA      = {"DK1": "idNUC_DK1", "DK2": "idNUC_DK2"}
+NUC_START_YEAR    = 2035
 NUCLEAR_IDS_BY_GEO = {
-    "disaggEA": {"idNUC_DK1": 2035, "idNUC_DK2": 2035},
-    "aggEA":    {"idNUC_DK1": 2035, "idNUC_DK2": 2035},
+    "disaggEA": {i: NUC_START_YEAR for i in NUC_ID_BY_EA.values()},
+    "aggEA":    {i: NUC_START_YEAR for i in NUC_ID_BY_EA.values()},
 }
-NUCLEAR_IDS = dict(NUCLEAR_IDS_BY_GEO["disaggEA"])      # aktiv geografi; skift med use_geography
+NUCLEAR_IDS = dict(NUCLEAR_IDS_BY_GEO["disaggEA"])
 
 
 def use_geography(geo):
-    """Sæt de aktive kernekraft-id'er for alle moduler. Dict'en ændres på stedet,
-    så moduler, der har importeret NUCLEAR_IDS, ser ændringen."""
+    """Set the active nuclear ids in place, so every module that imported
+    NUCLEAR_IDS sees the change."""
     if geo not in NUCLEAR_IDS_BY_GEO:
-        raise KeyError(f"ukendt geografi {geo!r}; vælg en af {sorted(NUCLEAR_IDS_BY_GEO)}")
+        raise KeyError(f"unknown geography {geo!r}; choose one of {sorted(NUCLEAR_IDS_BY_GEO)}")
     NUCLEAR_IDS.clear()
     NUCLEAR_IDS.update(NUCLEAR_IDS_BY_GEO[geo])
     return dict(NUCLEAR_IDS)
 
 
-def _members(m):
-    """Normalise bucket members to tuples -- a bare string ('X') iterates as
-    characters and silently unmaps the bucket."""
-    return {k: (v,) if isinstance(v, str) else tuple(v) for k, v in m.items()}
+# ==================== ==================== ==================== ====================
+# 4. buckets and display orders
 
-
-# Plant-type buckets for the stacked production / profit figures.
 PT_AGGS = _members({
     "Sol":        ("PV", "PVES"),
     "Vind":       ("WS", "WL"),
@@ -109,387 +109,46 @@ PT_AGGS = _members({
     "Varme":      ("BH", "EPH", "SH", "HS", "EH"),
     "Kernekraft": (NUCLEAR_PT,),
 })
-
 PT_DROP = tuple(PT_AGGS["Varme"]) + ("PX", "EF")
 
-# --- display orders --- #
-REGION_ORDER = ["DK", "NO", "SE", "Scandi"]
-PARTNER_ORDER = ["DK", "NO", "SE"] + _SINGLE_AREAS
-PT_AGG_ORDER = ["Kernekraft", "Vandkraft", "Vind", "Sol", "Batterier",
-                "Regulerbar", "Varme"]
-WELFARE_SERIES = ("dCS", "dPS", "net")
+REGION_ORDER        = ["DK", "NO", "SE", "Scandi"]
+PARTNER_ORDER       = ["DK", "NO", "SE"] + _SINGLE_AREAS
+PT_AGG_ORDER        = ["Kernekraft", "Vandkraft", "Vind", "Sol", "Batterier",
+                       "Regulerbar", "Varme"]
+WELFARE_SERIES      = ("dCS", "dPS", "net")
 WELFARE_SERIES_FULL = ("dCS", "dPS", "dCI", "annuity", "net")
 
-NX_COMP_AGGS = {**PT_AGGS, **PARTNER_MAP}
+NX_COMP_AGGS  = {**PT_AGGS, **PARTNER_MAP}
 NX_COMP_ORDER = PT_AGG_ORDER + PARTNER_ORDER
 
 assert set(PT_AGGS) == set(PT_AGG_ORDER), "PT_AGGS / PT_AGG_ORDER out of sync"
 assert set(PARTNER_MAP) == set(PARTNER_ORDER), "PARTNER_MAP / PARTNER_ORDER out of sync"
 
 
-# =========================================================================== #
-# 2. labels
-# =========================================================================== #
-col_names_en = {
-    # --- plant types ---
-    "ES": "Electricity storage",
-    "HS": "Heat storage",
-    "HYS": "Hydro (pump storage)",
-    "HY": "Hydro (reservoir storage)",
-    "RO": "Run-of-river",
-    "PV": "Photovoltaic",
-    "PVES": "PV with battery (clusters)",
-    "SH": "Solar heat",
-    "WL": "Wind (onshore)",
-    "WS": "Wind (offshore)",
-    "CD": "Condensation",
-    "EX": "Extraction (CHP)",
-    "BH": "Boiler heater",
-    "EPE": "Exogenous electricity production",
-    "EPH": "Exogenous district heat production",
-    "FD": "FD",                                   # TODO: confirm what FD is
-    "BP": "Backpressure (CHP)",
-    "BB": "Backpressure with bypass (CHP)",
-    "EH": "Electric heaters",
-    "EF": "Electrofuels (PtX)",
-    "PX": "Power-to-X (PtX)",
-    "EV_V2G": "Electric vehicles (V2G)",
-    "Nuclear": "Nuclear",
-    # --- consumption types ---
-    "classic": "Classic demand",
-    "hsdc": "Data centres",
-    "EV": "Electric transport",
-    "EV_V2G_charge": "Electric vehicles (V2G charging)",
-    "HP": "Individual heat pumps",
-    "district_heat": "District heat demand",
-    "CCS": "CCS electricity use",
-    "distrLoss": "Distribution losses",
-    "trLoss": "Transmission losses",
-    # --- price zones ---
-    "DK1": "Denmark (West)",
-    "DK2": "Denmark (East)",
-    "DK3": "Denmark (Bornholm)",
-    "NorthSea": "North Sea",
-    "NOS": "Norway (South)",
-    "NOM": "Norway (Middle)",
-    "NON": "Norway (North)",
-    "SE1": "Sweden (North)",
-    "SE2": "Sweden (Middle north)",
-    "SE3": "Sweden (Middle south)",
-    "SE4": "Sweden (South)",
-    "FI": "Finland",
-    "EELVLT": "Baltics",
-    "GBNIIE": "United Kingdom & Ireland",
-    "NL": "Netherlands",
-    "DELU": "Germany & Luxembourg",
-    "BE": "Belgium",
-    "FR": "France",
-    "CH": "Switzerland",
-    "AT": "Austria",
-    "PL": "Poland",
-    "CZSK": "Czechia & Slovakia",
-    "HUSI": "Hungary & Slovenia",
-    "IT": "Italy",
-    "ESPT": "Spain & Portugal",
-    # --- country aggregates ---
-    "DK": "Denmark",
-    "NO": "Norway",
-    "SE": "Sweden",
-    "Scandi": "Scandinavia",
-    "ALL": "abroad",
-    "ROW": "Rest of Europe",      # col_names_en
-}
+# ==================== ==================== ==================== ====================
+# 5. balance-frame columns
 
-col_names_da = {
-    # --- plant types ---
-    "ES": "Ellagring",
-    "HS": "Varmelagring",
-    "HYS": "Vandkraft (pumpelager)",
-    "HY": "Vandkraft (magasin)",
-    "RO": "Vandkraft (flodkraft)",
-    "PV": "Solceller",
-    "PVES": "Solceller med batteri (klynger)",
-    "SH": "Solvarme",
-    "WL": "Landvind",
-    "WS": "Havvind",
-    "CD": "Kondensværk",
-    "EX": "Udtagsværk (kraftvarme)",
-    "BH": "Varmekedel",
-    "EPE": "Eksogen elproduktion",
-    "EPH": "Eksogen fjernvarmeproduktion",
-    "FD": "FD",                                   # TODO: bekræft hvad FD er
-    "BP": "Modtryksværk (kraftvarme)",
-    "BB": "Modtryksværk med bypass (kraftvarme)",
-    "EH": "Elkedler og varmepumper",
-    "EF": "Elektrofuels (PtX)",
-    "PX": "Power-to-X med varme",
-    "EV_V2G": "Elbiler (V2G)",
-    "Nuclear": "Kernekraft",
-    # --- consumption types ---
-    "classic": "Klassisk elforbrug",
-    "hsdc": "Datacentre",
-    "EV": "Eltransport",
-    "EV_V2G_charge": "Elbiler (V2G-opladning)",
-    "HP": "Individuelle varmepumper",
-    "district_heat": "Fjernvarmeforbrug",
-    "CCS": "CCS-elforbrug",
-    "distrLoss": "Distributionstab",
-    "trLoss": "Transmissionstab",
-    # --- price zones ---
-    "DK1": "Danmark (Vest)",
-    "DK2": "Danmark (Øst)",
-    "DK3": "Danmark (Bornholm)",
-    "NorthSea": "Nordsøen",
-    "NOS": "Norge (syd)",
-    "NOM": "Norge (midt)",
-    "NON": "Norge (nord)",
-    "SE1": "Sverige (nord)",
-    "SE2": "Sverige (midtnord)",
-    "SE3": "Sverige (midtsyd)",
-    "SE4": "Sverige (syd)",
-    "FI": "Finland",
-    "EELVLT": "Baltikum",
-    "GBNIIE": "Storbritannien og Irland",
-    "NL": "Nederlandene",
-    "DELU": "Tyskland og Luxembourg",
-    "BE": "Belgien",
-    "FR": "Frankrig",
-    "CH": "Schweiz",
-    "AT": "Østrig",
-    "PL": "Polen",
-    "CZSK": "Tjekkiet og Slovakiet",
-    "HUSI": "Ungarn og Slovenien",
-    "IT": "Italien",
-    "ESPT": "Spanien og Portugal",
-    # --- country aggregates ---
-    "DK": "Danmark",
-    "NO": "Norge",
-    "SE": "Sverige",
-    "Scandi": "Skandinavien",
-    "ALL": "udlandet",
-    "ROW": "Øvrige Europa",       # col_names_da
-}
-
-# Active label map. Swap to `col_names_en` for an English deliverable.
-col_names = col_names_da
-
-STATE_LABELS = {"baseline": STATE_BASE_LABEL, "shock": "Stød"}
-
-PRICE_STAT_LABELS = {
-    "mean": "Gennemsnitspris",
-    "std": "Prisvolatilitet (std.afv.)",
-    "min": "Minimumspris",
-    "max": "Maksimumspris",
-}
-
-TRADE_COMP_LABELS = {
-    "net": "Nettoeksport",
-    "export": "Eksport",
-    "import": "Import",
-}
-
-WELFARE_COMP_LABELS = {
-    "dCS": "Forbrugeroverskud",
-    "dPS": "Producentoverskud",
-    "dCI": "Flaskehalsindtægt",
-    "annuity": "Kabelomkostning (annuitet)",
-    "net": "Nettoeffekt",
-}
-
-# All rendered figure text, so plotting modules hold no string literals.
-FIG_TEXT = {
-    # --- units ---
-    "unit_price": "kr./MWh",
-    "unit_price_ore": "øre/kWh",
-    "unit_pct": "pct.",
-    "unit_energy": "GWh",
-    "unit_energy_yr": "TWh",
-    "unit_value": "mia. kr.",
-    "unit_value_mio": "mio. kr.",
-
-    # --- shared fragments ---
-    "all_years": "alle år",
-    "delta_abs": "ændring",
-    "delta_rel": "relativ ændring",
-    "delta_note": "kernekraftforløb − basisforløb",
-    "delta_note_transm": "kabelforløb − basisforløb",
-    "total_label": "I alt",
-    "total_label_nx": "Nettoeksport",
-
-    # --- axis labels ---
-    "xlabel_hours_price": "Timer, sorteret efter områdepris",
-    "xlabel_hours_src_price": "Timer, sorteret efter pris i afsenderområde",
-    "ylabel_price_el": "Elpris (kr./MWh)",
-    "ylabel_price_dh": "Fjernvarmepris (kr./MWh)",
-    "ylabel_price_el_ore": "Elpris (øre/kWh)",
-    "ylabel_price_dh_ore": "Fjernvarmepris (øre/kWh)",
-
-    # --- titles: prices ---
-    "title_price_levels": "Efterspørgselsvægtet elpris pr. region i {year}",
-    "title_price_delta": "Priseffekt af stødet pr. region i {year} ({unit}, {note})",
-    "title_capture_delta": "Ændring i fangstpris pr. produktionstype i {region}, {year}",
-
-    # --- titles: trade ---
-    "title_trade_q": "Nettoeksport af el pr. region i {year}",
-    "title_trade_v": "Værdi af nettoeksport af el pr. region i {year}",
-    "title_trade_delta_q": "Ændring i nettoeksport pr. handelspartner i {year}",
-    "title_trade_delta_v": "Ændring i eksportværdi pr. handelspartner i {year}",
-    "title_nx_pt_delta": "Ændring i nettoeksport pr. produktionstype i {year}",
-    "title_net_export": "Nettoeksport af el for {area} i {year}",
-    "title_net_export_pt": "Figur 2: Nettoeksport fra {area} "
-                           "fordelt på anlægstype i {year}",
-
-    # --- titles: production, profit, welfare ---
-    "title_gen_stack": "Elproduktion pr. region i {year}",
-    "title_gen_delta": "Ændring i elproduktion pr. produktionstype i {year}",
-    "title_profit_stack": "Producentoverskud pr. anlægstype pr. region i {year}",
-    "title_profit_delta": "Ændring i producentoverskud pr. produktionstype i {year}",
-    "title_welfare": "Ændring i velfærd pr. region i {year} ({note})",
-    "welfare_ci_note": "inkl. flaskehalsindtægt",
-    "welfare_net_note": "inkl. flaskehalsindtægt og kabelomkostning",
-
-    # --- titles: energy balance ---
-    "title_balance_el": "Figur 1: Elbalance over året for {area} i {year}",
-    "title_balance_dh": "Fjernvarmebalance over året for {area} i {year}",
-
-    # newer
-    "title_cs_price_bin": "Ændring i forbrugeroverskud fordelt på prisniveau, {year}",
-    "price_bin_axis": "Timer rangeret efter baselinepris (billigst til dyrest)",
-    "price_bin_fmt": "{lo}–{hi} %",
-}
-
-
-def dk_num(value, decimals: int = 0, signed: bool = False) -> str:
-    """Danish number format: '.' as thousands separator, ',' as decimal."""
-    s = f"{value:{'+' if signed else ''},.{decimals}f}"
-    return s.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
-
-
-# =========================================================================== #
-# 3. colours
-# =========================================================================== #
-area_colors = {
-    # --- plant types ---
-    "ES":  "#0B3C5D", "HS":  "#0B3C5D", "HYS": "#6BAED6", "HY":  "#9ECAE1",
-    "RO":  "#C6DBEF", "PV":  "#F5A623", "PVES": "#E0901A", "SH":  "#F5A623",
-    "WL":  "#2E8B57", "WS":  "#66C2A5", "CD":  "#6F4E37", "EX":  "#6F4E37",
-    "EPE": "#8B5A2B", "BH":  "#6F4E37", "EPH": "#8B5A2B", "FD":  "#A0785A",
-    "BP":  "#D2B48C", "BB":  "#C49A6C", "EH":  "#E78AC3", "PX":  "#8E63CE",
-    "EF":  "#B39DDB", "EV_V2G": "#1F6F8B", "Nuclear": "#000000",
-    # --- consumption types ---
-    "classic": "#B22222", "hsdc": "#7A1A1A", "EV": "#D95F5F",
-    "EV_V2G_charge": "#1F6F8B", "HP": "#E8908A", "district_heat": "#B22222", "CCS": "#5A5A5A",
-    "distrLoss": "#F4A3A3", "trLoss": "#F7C6C6",
-    # --- price zones ---
-    "DK1": "#A05A5A", "DK2": "#C27B7B", "DK3": "#D9A3A3", "NorthSea": "#3E6E8E",
-    "NOS": "#5B7C99", "NON": "#7F9DB8", "NOM": "#A6BED3",
-    "SE1": "#C9A227", "SE2": "#D8B43C", "SE3": "#E5C85A", "SE4": "#F0DC7A",
-    "FI": "#8FB996", "EELVLT": "#6E9C76",
-    "DELU": "#8C8C8C", "NL": "#C28A52", "BE": "#B07A4A", "FR": "#4F6FA8",
-    "GBNIIE": "#75618C", "CH": "#9E4A4A", "AT": "#B8B8B8",
-    "PL": "#A3A3C2", "CZSK": "#8585A8", "HUSI": "#6B6B8E",
-    "IT": "#5E9E8C", "ESPT": "#D9A066",
-    # --- country aggregates (each takes its first zone's hue) ---
-    "DK": "#A05A5A", "NO": "#5B7C99", "SE": "#C9A227",     "ROW": "#A9A9A9",
-}
-
-PT_AGG_COLORS = {
-    "Vandkraft":  "#6BAED6",
-    "Vind":       "#2E8B57",
-    "Sol":        "#F5A623",
-    "Batterier":  "#0B3C5D",
-    "Regulerbar": "#6F4E37",
-    "Varme":      "#D2B48C",
-    "Kernekraft": "#000000",
-}
-
-# Scenario colours: navy = baseline, red = shock (matches the Excel workbooks).
-STATE_COLORS = {"baseline": "#0B3C5D", "shock": "#B22222"}
-DELTA_COLORS = {"up": "#B22222", "down": "#0B3C5D"}
-
-WELFARE_COLORS = {
-    "dCS": "#B22222",     # red
-    "dPS": "#0B3C5D",     # navy
-    "dCI": "#5B7C99",     # slate -- congestion rent
-    "annuity": "#6F4E37",  # brown -- cost, the only negative-by-construction bar
-    "net": "#C9A227",     # gold -- the summary bar
-}
-
-# Fallbacks used only when a series is missing from the maps above.
-DEFAULT_LABELS = {NUCLEAR_PT: col_names.get(NUCLEAR_PT, "Kernekraft")}
-DEFAULT_COLORS = {NUCLEAR_PT: "#000000"}
-MISSING_COLOR = "#CCCCCC"
-NX_COMP_COLORS = {**PT_AGG_COLORS, **{k: area_colors[k] for k in PARTNER_ORDER
-                                      if k in area_colors}}
-
-# =========================================================================== #
-# 4. column conventions
-# =========================================================================== #
-# --- electricity (EA market), price pE --- #
+# electricity (EA market), price pE
 _META_BUILD = ["t", "EA", "h", "hFull", "hWeight", "pE"]
-META_COLS = _META_BUILD + ["pE_baseline"]
+META_COLS   = _META_BUILD + ["pE_baseline"]
 PT_COLS = [
     "ES", "HYS", "EV_V2G", "HY", "RO", "PVES", "PV", "WL", "WS",
     "CD", NUCLEAR_PT, "EPE", "FD", "BP", "BB", "EX", "EH", "PX", "EF",
 ]
-CTYPE_COLS = ["classic", "hsdc", "EV", "EV_V2G_charge", "HP", "CCS", "distrLoss", "trLoss"]
-COL_ORDER = PT_COLS + CTYPE_COLS + EA_ORDER
+CTYPE_COLS  = ["classic", "hsdc", "EV", "EV_V2G_charge", "HP", "CCS", "distrLoss", "trLoss"]
+COL_ORDER   = PT_COLS + CTYPE_COLS + EA_ORDER
 _FULL_ORDER = _META_BUILD + COL_ORDER
 
-# Storage-like series: clipped at 0 on the side where they do not belong.
-CLAMP_SUPPLY = ("ES", "HYS", "EV_V2G")            # discharge only on the supply side
-CLAMP_DEMAND = ("ES", "HYS", "EV_V2G_charge")      # charging only on the demand side
-SPLIT_COLS = ("PVES",)                             # net injection: + supply, - demand
+# Storage-like series, clipped at 0 on the side where they do not belong.
+CLAMP_SUPPLY = ("ES", "HYS", "EV_V2G")           # discharge only on the supply side
+CLAMP_DEMAND = ("ES", "HYS", "EV_V2G_charge")     # charging only on the demand side
+SPLIT_COLS   = ("PVES",)                          # net injection: + supply, - demand
 
-# --- district heating (HA market) -- no inter-area trade, price pH --- #
-_META_BUILD_HA = ["t", "HA", "h", "hFull", "hWeight", "pH"]
-META_COLS_HA = _META_BUILD_HA + ["pH_baseline"]
-COL_ORDER_HA = ["HS", "SH", "EH", "BH", "EPH", "BP", "BB", "EX", NUCLEAR_PT, "PX",
-                "district_heat", "CCS"]
-_FULL_ORDER_HA = _META_BUILD_HA + COL_ORDER_HA
+# district heating (HA market), price pH, no inter-area trade
+_META_BUILD_HA  = ["t", "HA", "h", "hFull", "hWeight", "pH"]
+META_COLS_HA    = _META_BUILD_HA + ["pH_baseline"]
+COL_ORDER_HA    = ["HS", "SH", "EH", "BH", "EPH", "BP", "BB", "EX", NUCLEAR_PT, "PX",
+                   "district_heat", "CCS"]
+_FULL_ORDER_HA  = _META_BUILD_HA + COL_ORDER_HA
 CLAMP_SUPPLY_HA = ("HS", "SH")
 CLAMP_DEMAND_HA = ("HS",)
-
-
-# =========================================================================== #
-# 5. figure style
-# =========================================================================== #
-BG_COLOR = "#E8EDEF"      # figure/axes fill, replacing white + boxed frame
-TEXT_COLOR = "#2F3C41"
-PANEL_EDGE = "#C9D2D5"
-PANEL_EDGE_LW = 0.8
-FIGSIZE_WIDE = (12, 4)    # house width is always 12
-
-_AEJ_RCPARAMS = {
-    "font.family": "serif",
-    "font.size": 15,
-    "axes.linewidth": 1.0,
-    "lines.linewidth": 1.2,
-    "axes.spines.top": True,
-    "axes.spines.right": True,
-    "xtick.direction": "out",
-    "ytick.direction": "out",
-    "legend.frameon": True,
-    "legend.fancybox": True,
-    "legend.borderaxespad": 0.4,
-    "legend.handlelength": 2.0,
-    "legend.handletextpad": 0.6,
-    "legend.labelspacing": 0.35,
-    "savefig.bbox": "tight",
-    "savefig.dpi": 300,
-    "text.color":      TEXT_COLOR,   # titles, suptitle, annotations
-    "axes.labelcolor": TEXT_COLOR,
-    "axes.titlecolor": TEXT_COLOR,
-    "xtick.color":     TEXT_COLOR,
-    "ytick.color":     TEXT_COLOR,
-    "axes.labelsize": 11,
-    "xtick.labelsize": 11,
-    "ytick.labelsize": 11,
-    "axes.titlesize": 11,
-    "legend.fontsize": 11,
-}
-
-
-def set_aej() -> None:
-    """Apply the AEJ-style matplotlib defaults."""
-    plt.rcParams.update(_AEJ_RCPARAMS)

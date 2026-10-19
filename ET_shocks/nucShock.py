@@ -2,7 +2,8 @@
 import numpy as np
 import pandas as pd
 
-NUC_IDS = {"DK1": "idNUC_DK1", "DK2": "idNUC_DK2"}
+from ET_pylib.groups import NUC_ID_BY_EA as NUC_IDS
+from ET_pylib.costs import nuc_wind_swap  # noqa: F401  re-exported for 2_Analysis
 
 
 def nuc_plants(gw, start_year, *, Eff, VOM, UranTax, FOM, sigmaID,
@@ -97,74 +98,3 @@ def solve_nuc_shock(run, db_base, plants, cuts, years, steps=(0.25, 0.5, 0.75, 1
     apply_levels(run.db, wind_levels)
     return dict(report=report, control=control, price_gap=gap, walked=walked)
 
-
-def nuc_wind_swap(baseline, shock, yr, dk=("DK1", "DK2"), wind=("WS",), verbose=True, nuc_ids=None):
-    """Nuclear capacity added vs. offshore wind displaced under a shock.
-    Returns (nuc, cut): per-id DataFrames."""
-    nuc_ids = list(NUC_IDS.values()) if nuc_ids is None else list(nuc_ids)
-
-    def xs(db, sym):
-        v = db(sym).xs(yr, level="t").astype("float64")
-        v.index = v.index.astype(str)
-        return v
-
-    def idmap(db, sym):
-        v = db(sym)
-        return pd.Series(v.get_level_values(1), index=v.get_level_values(0).astype(str))
-
-    b, s, hcap = xs(baseline, "ECap"), xs(shock, "ECap"), xs(shock, "HCap")
-    pt, ea = idmap(shock, "id2Pt"), idmap(shock, "id2EA")
-
-    nuc = pd.DataFrame({"EA": ea.reindex(nuc_ids).values, "Pt": pt.reindex(nuc_ids).values,
-                        "GW_base": b.reindex(nuc_ids, fill_value=0.0).values,
-                        "GW_added": s.reindex(nuc_ids, fill_value=0.0).values,
-                        "GW_heat": hcap.reindex(nuc_ids, fill_value=0.0).values}, index=nuc_ids)
-    nuc = nuc[nuc["EA"].isin(dk)]
-
-    w = [i for i in pt.index[pt.isin(wind)] if i not in nuc_ids]
-    base_w, shock_w = b.reindex(w, fill_value=0.0), s.reindex(w, fill_value=0.0)
-    cut = pd.DataFrame({"EA": ea.reindex(w).values, "Pt": pt.reindex(w).values,
-                        "GW_base": base_w.values, "GW_cut": (base_w - shock_w).values},
-                       index=w)
-    cut = cut[cut["EA"].isin(dk)]
-
-    if verbose:
-        _print_swap(nuc, cut, yr, wind)
-    return nuc, cut
-
-
-def _print_swap(nuc, cut, yr, wind=("WS",)):
-    from ET_pylib.groups import dk_num, col_names
-
-    def f(v, signed=False):
-        return dk_num(v, 2, signed)
-
-    nuc_label = col_names.get("Nuclear", "Kernekraft")
-    rows = [(f"  {nuc_label} {r.EA}", r.GW_base, r.GW_added)
-            for _, r in nuc.sort_values("EA").iterrows()]
-    agg = cut.groupby(["EA", "Pt"])[["GW_base", "GW_cut"]].sum()
-    rows += [(f"  {col_names.get(p, p)} {a}", r.GW_base, r.GW_base - r.GW_cut)
-             for (a, p), r in agg.iterrows()]
-
-    lw = max([len(r[0]) for r in rows] + [28]) + 2
-    rule = "─" * (lw + 30)
-    print(f"Kapacitetsbytte, {yr} (GW)\n{rule}")
-    print(f"{'':<{lw}}{'basis':>10}{'stød':>10}{'Δ':>10}\n{rule}")
-
-    if nuc.GW_added.abs().sum() == 0:
-        print(f"  Ingen kernekraft i {yr}.")
-    for label, base, shock in rows:
-        print(f"{label:<{lw}}{f(base):>10}{f(shock):>10}{f(shock - base, True):>10}")
-    print(rule)
-
-    d_nuc = float((nuc.GW_added - nuc.GW_base).sum())
-    d_wind = float(-cut.GW_cut.sum())
-    wind_label = col_names.get(wind[0], "Vind") if len(wind) == 1 else "Vind"
-    print(f"{f'  {nuc_label} i alt':<{lw + 20}}{f(d_nuc, True):>10}")
-    print(f"{f'  {wind_label} i alt':<{lw + 20}}{f(d_wind, True):>10}")
-    if d_nuc > 0:
-        print(f"{f'  {wind_label} fjernet pr. GW {nuc_label.lower()}':<{lw + 20}}"
-              f"{dk_num(-d_wind / d_nuc, 2):>10}")
-    if nuc.GW_heat.abs().sum() > 0:
-        print(f"{f'  {nuc_label}, varme (GW-th)':<{lw + 20}}{f(nuc.GW_heat.sum(), True):>10}")
-    print(rule)

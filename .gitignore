@@ -1,0 +1,10 @@
+# model output (large binaries)
+*.pkl
+*.gdx
+*.g00
+ET_intermediate/
+
+# python / jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

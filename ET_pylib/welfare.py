@@ -16,12 +16,12 @@ import pandas as pd
 
 from .groups import (
     c_aggs, EA_TO_COUNTRY, SCAND_ZONES, NUCLEAR_IDS, PT_RENAME, HEAT_PTS,
-    ANALYSIS_YEAR, REGION_ORDER,
+    ANALYSIS_YEAR, REGION_ORDER, NUC_ID_BY_EA,
 )
-from .style import dk_num, price_bin_labels
-from ._util import (
-    id_map, filter_years, relabel_nuclear, active_line_export, equal_hour_bins, print_table,
+from .style import (
+    STATE_SHORT, TOTAL_LABEL, dk_num, price_bin_labels, print_table, label_of, area_label,
 )
+from ._util import id_map, filter_years, relabel_nuclear, active_line_export, equal_hour_bins
 from .costs import (
     R, SYSCOST_SPECS, NUC_SYSCOST_ORE_KWH, ORE_KWH_PR_TWH,
     annuity_by_tech, swap_deltas, syscost_mio, nuc_wind_swap,
@@ -200,22 +200,27 @@ def print_producer_profit(by_tech, *, year, areas=DK, decomp=None):
     """Producer profit by Pt; with `decomp`, the price/quantity/residual split
     (residual ~0 when capacity and marginal cost are unchanged)."""
     cols = ["profit_base", "profit_shock", "dProfit"]
-    heads = ["base", "shock", "Δprofit"]
+    heads = [STATE_SHORT["baseline"], STATE_SHORT["shock"], "Δ"]
     df = by_tech.xs(year, level="t")[cols]
     if decomp is not None:
         df = df.join(decomp.xs(year, level="t").reindex(df.index).fillna(0.0))
         df["rest"] = df["dProfit"] - df["price_effect"] - df["qty_effect"]
         cols += ["price_effect", "qty_effect", "rest"]
         heads += ["pris", "mængde", "rest"]
-    print_table(df, cols, heads, ",.1f", w=12, total="all",
-                title=f"Producer profit — {year}, {'+'.join(areas)}  (million DKK)")
+    df = df[cols]
+    df.index = [label_of(p) for p in df.index]
+    print_table(df, [",.1f", ",.1f"] + ["+,.1f"] * (len(cols) - 2), heads=heads, total="all",
+                groups=["Producentoverskud"] * 3 + ["Δ, heraf"] * (len(cols) - 3),
+                title=f"Producentoverskud — {area_label(areas)}, {year}", unit="mio. kr.")
 
 
 def print_producer_qty(by_qty, *, year, areas):
-    """Generation by Pt (TWh) for one area scope."""
-    print_table(by_qty.xs(year, level="t"), ["q_base", "q_shock", "dQ_TWh"],
-                ["base", "shock", "ΔTWh"], ",.3f", w=12, total="all",
-                title=f"Generation — {year}, {'+'.join(areas)}  (TWh)")
+    """Generation by plant type (TWh) for one area scope."""
+    df = by_qty.xs(year, level="t")[["q_base", "q_shock", "dQ_TWh"]]
+    df.index = [label_of(p) for p in df.index]
+    print_table(df, [",.2f", ",.2f", "+,.2f"], total="all",
+                heads=[STATE_SHORT["baseline"], STATE_SHORT["shock"], "Δ"],
+                title=f"Elproduktion — {area_label(areas)}, {year}", unit="TWh")
 
 
 # ==================== ==================== ==================== ====================
@@ -261,28 +266,29 @@ def consumer_surplus(baseline, shock, *, year, areas=DK, markets=("E", "H"), sca
 
 
 def print_cs_table(baseline, shock, *, year, regions=None, scale=1.0):
-    """ΔCS table (electricity) with per-country subtotals and a grand total."""
+    """ΔCS table (electricity) by zone, with country subtotals and a grand total.
+    `regions` is {country code: zones}; default DK, NO and SE."""
     if regions is None:
-        regions = {"Denmark": c_aggs["DK"], "Norway": c_aggs["NO"], "Sweden": c_aggs["SE"]}
+        regions = {c: c_aggs[c] for c in ("DK", "NO", "SE")}
     cols = ["dCS", "price_effect", "quantity_effect"]
     grand = pd.Series(0.0, index=cols)
-    line = lambda lab, v: f'{"  " + lab:<16}' + "".join(f"{x:>12,.1f}" for x in v)
-
-    print(f"ΔCS {year} — million DKK (electricity)\n")
-    print(f'{"":<16}{"ΔCS":>12}{"price":>12}{"quantity":>12}')
-    print("─" * 52)
+    rows, rules = {}, []
     for country, areas in regions.items():
         bma, _, _, _ = consumer_surplus(baseline, shock, year=year, areas=areas,
                                         scale=scale, markets=("E",))
         # An area without consumers (DK3) has no demand rows: it contributes zero.
         sub = bma.xs("E", level="market")[cols].reindex(list(areas), fill_value=0.0)
-        print(country)
+        if rows:
+            rules.append(len(rows))
         for zone in areas:
-            print(line(zone, sub.loc[zone]))
-        print(line(f"{country} total", sub.sum()))
+            rows[label_of(zone)] = sub.loc[zone].tolist()
+        rows[f"{label_of(country)} i alt"] = sub.sum().tolist()
         grand += sub.sum()
-    print("═" * 52)
-    print(f'{"Total":<16}' + "".join(f"{v:>12,.1f}" for v in grand))
+    rules.append(len(rows))
+    rows[TOTAL_LABEL] = grand.tolist()
+    print_table(pd.DataFrame.from_dict(rows, orient="index"), "+,.1f",
+                heads=["ΔCS", "pris", "mængde"], groups=["", "heraf", "heraf"], rules=rules,
+                title=f"Forbrugeroverskud, el — {year}", unit="mio. kr.")
 
 
 def cs_by_price_bin(baseline_output, shock_output, regions=None, *,
@@ -374,6 +380,20 @@ def ci_by_country(db, year, *, tso_share=0.5):
     return zones.round(1), by_country.round(1).to_frame()
 
 
+def print_ci(baseline_output, shock_output, *, year, country="DK", tso_share=0.5):
+    """Congestion rent to one country's TSOs by zone, baseline vs. shock."""
+    zb, _ = ci_by_country(baseline_output, year, tso_share=tso_share)
+    zs, _ = ci_by_country(shock_output, year, tso_share=tso_share)
+    zones = [z for z in zb.index if zb.loc[z, "land"] == country]
+    df = pd.DataFrame({"b": zb.loc[zones, "CI_mioDKK"],
+                       "s": zs["CI_mioDKK"].reindex(zones, fill_value=0.0)})
+    df["d"] = df["s"] - df["b"]
+    df.index = [label_of(z) for z in zones]
+    print_table(df, [",.1f", ",.1f", "+,.1f"], total="all",
+                heads=[STATE_SHORT["baseline"], STATE_SHORT["shock"], "Δ"],
+                title=f"Flaskehalsindtægt til TSO — {area_label(country)}, {year}", unit="mio. kr.")
+
+
 def _ci_delta_by_country(baseline_output, shock_output, year):
     """Δ congestion rent by country (mio. kr.), shock - baseline."""
     _, c_base = ci_by_country(baseline_output, year)
@@ -419,6 +439,20 @@ def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
     s.loc["total"] = s.sum()
     s["p_extra"] = s["p_dq"] / s["dq"]
     return s.rename(columns={"q": "TWh", "dq": "dTWh"})[["TWh", "dTWh", "p_extra", "dW"]]
+
+
+def print_flex(db, *, year, u_mins=(1.0,), syscost=NUC_SYSCOST_ORE_KWH):
+    """`nuc_flex_value` per minimum load: one table per u_min, plants then total."""
+    ea_of = {i: ea for ea, i in NUC_ID_BY_EA.items()}
+    for u in u_mins:
+        f = nuc_flex_value(db, year=year, u_min=u, syscost=syscost)
+        f.index = [TOTAL_LABEL if i == "total" else f"{label_of('Nuclear')} {ea_of.get(i, i)}"
+                   for i in f.index]
+        print_table(f, [",.2f", ",.2f", ",.1f", "+,.1f"],
+                    heads=["produktion", "ekstra", "pris, ekstra", "ΔW"],
+                    groups=["TWh", "TWh", "kr./MWh", "mio. kr."], rules=[len(f) - 1],
+                    title=f"Fleksibilitetsværdi, kernekraft — {year}, "
+                          f"minimumslast {dk_num(100 * u)} pct.")
 
 
 # ==================== ==================== ==================== ====================
@@ -599,11 +633,11 @@ def _blocks_attr(blocks, key, default=None):
     return vals[0]
 
 
-def print_welfare_blocks(blocks, *, regions=None, gap=3, dec=2):
-    """One or more welfare blocks side by side (e.g. rate schedules), one table
-    per region. `blocks` is {column name: block} or a single block."""
+def print_welfare_blocks(blocks, *, regions=None, dec=2):
+    """One or more welfare blocks side by side (e.g. rate schedules), one table per
+    region. `blocks` is {column name: block} or a single block."""
     if hasattr(blocks, "columns"):
-        blocks = {"": blocks}
+        blocks = {"effekt": blocks}
     blocks = dict(blocks)
     if not blocks:
         raise ValueError("no blocks to print")
@@ -623,60 +657,35 @@ def print_welfare_blocks(blocks, *, regions=None, gap=3, dec=2):
     elif isinstance(regions, str):
         regions = [regions]
 
-    rows = list(WELFARE_ROWS) + [(sp.key, sp.label) for sp in specs]
-    vals = lambda key, reg: [float(blocks[n].loc[key, reg]) for n in names]
-
+    fmt = f"+,.{dec}f"
     for region in regions:
-        # ("row", indent, label, values) | ("rule",) | ("text", line)
-        entries = [("row", 2, lbl, vals(key, region)) for key, lbl in rows]
-        entries += [("rule",), ("row", 2, NET_ROW[1], vals(NET_ROW[0], region)), ("rule",)]
-
+        vals = lambda key: [float(blocks[n].loc[key, region]) for n in names]
+        rows = {lbl: vals(key) for key, lbl in list(WELFARE_ROWS) + [(sp.key, sp.label) for sp in specs]}
+        rules = [len(rows)]
+        rows[NET_ROW[1]] = vals(NET_ROW[0])
         if techs:
-            entries.append(("text", "  heraf annuitet (+ = omkostning, − = sparet):"))
-            entries += [("row", 4, TECH_LABELS.get(t, t), vals("ann_" + t, region))
-                        for t in techs]
-            entries.append(("row", 4, "netto omkostning",
-                            [sum(float(blocks[n].loc["ann_" + t, region]) for t in techs)
-                             for n in names]))
-            entries.append(("rule",))
+            rules.append(len(rows))
+            for t in techs:
+                rows[f"Annuitet, {TECH_LABELS.get(t, t).lower()}"] = vals("ann_" + t)
 
-        if specs:                                    # quantities do not depend on the rate
-            entries.append(("text", "  systemomkostning, grundlag:"))
-            pad = max(len(sp.label.split(",")[-1].strip()) for sp in specs)
-            for sp in specs:
-                nm = sp.label.split(",")[-1].strip().ljust(pad)
-                basis = "niveau" if sp.basis == "level" else "ændring"
-                qs = [twh[n].get(sp.key, {}).get(region) for n in names]
-                rs = [float(rates[n].get(sp.key, sp.rate)) for n in names]
-                q_txt = lambda q: "n/a" if q is None else dk_num(q, 3, True) + " TWh"
-                same = (all(q is not None for q in qs)
-                        and max(qs) - min(qs) < 1e-9 and len(set(rs)) == 1)
-                if same:
-                    entries.append(("text", f"    {nm}  {q_txt(qs[0])} ({basis}) "
-                                            f"x {dk_num(rs[0], 0)} {sp.unit_label}"))
-                else:
-                    for n, q, rr in zip(names, qs, rs):
-                        entries.append(("text", f"    {nm}  {n}: {q_txt(q)} ({basis}) "
-                                                f"x {dk_num(rr, 0)} {sp.unit_label}"))
-            entries.append(("rule",))
-
-        rws = [e for e in entries if e[0] == "row"]
-        label_w = max(e[1] + len(e[2]) for e in rws) + gap
-        col_w = max(max(len(dk_num(v, dec, True)) for e in rws for v in e[3]),
-                    max(len(n) for n in names)) + gap
-        rule = "─" * (label_w + col_w * len(names))
-
-        out = [f"Velfærdseffekt, {region}" + (f" — {year}" if year else ""), f"({unit})", rule]
-        if any(names):
-            out += [" " * label_w + "".join(n.rjust(col_w) for n in names), rule]
-
-        for e in entries:
-            if e[0] == "rule":
-                out.append(rule)
-            elif e[0] == "text":
-                out.append(e[1])
+        notes = []
+        if techs:
+            notes.append("Annuitet: + = omkostning, - = sparet.")
+        for sp in specs:                             # quantities do not depend on the rate
+            name = sp.label.split(",")[-1].strip()
+            basis = "niveau" if sp.basis == "level" else "ændring"
+            qs = [twh[n].get(sp.key, {}).get(region) for n in names]
+            rs = [float(rates[n].get(sp.key, sp.rate)) for n in names]
+            q_txt = lambda q: "n/a" if q is None else dk_num(q, 3, True) + " TWh"
+            if (all(q is not None for q in qs) and max(qs) - min(qs) < 1e-9
+                    and len(set(rs)) == 1):
+                notes.append(f"Systemomkostning, {name}: {q_txt(qs[0])} ({basis}) "
+                             f"x {dk_num(rs[0], 0)} {sp.unit_label}")
             else:
-                _, ind, lbl, vs = e
-                out.append(" " * ind + lbl.ljust(label_w - ind)
-                           + "".join(dk_num(v, dec, True).rjust(col_w) for v in vs))
-        print("\n".join(out))
+                notes += [f"Systemomkostning, {name}, {n}: {q_txt(q)} ({basis}) "
+                          f"x {dk_num(rr, 0)} {sp.unit_label}" for n, q, rr in zip(names, qs, rs)]
+
+        print_table(pd.DataFrame.from_dict(rows, orient="index", columns=names), fmt,
+                    rules=rules, notes=notes, unit=unit,
+                    title=f"Velfærdseffekt — {area_label(region)}"
+                          + (f", {year}" if year else ""))

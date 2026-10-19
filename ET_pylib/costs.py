@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .groups import NUC_ID_BY_EA, NUCLEAR_IDS, c_aggs
-from .style import dk_num, col_names
+from .groups import NUC_ID_BY_EA, NUCLEAR_IDS, NUCLEAR_PT, c_aggs
+from .style import STATE_SHORT, dk_num, label_of, area_label, print_table
 from ._util import sym_year, id_map
 
 
@@ -86,37 +86,31 @@ def nuc_wind_swap(baseline, shock, yr, dk=("DK1", "DK2"), wind=("WS",), verbose=
 
 
 def print_swap(nuc, cut, yr, wind=("WS",)):
-    """Capacity-swap table (GW): nuclear added, wind removed, ratio."""
-    f = lambda v, signed=False: dk_num(v, 2, signed)
-    nuc_label = col_names.get("Nuclear", "Kernekraft")
-    rows = [(f"  {nuc_label} {r.EA}", r.GW_base, r.GW_added)
-            for _, r in nuc.sort_values("EA").iterrows()]
-    agg = cut.groupby(["EA", "Pt"])[["GW_base", "GW_cut"]].sum()
-    rows += [(f"  {col_names.get(p, p)} {a}", r.GW_base, r.GW_base - r.GW_cut)
-             for (a, p), r in agg.iterrows()]
-
-    lw = max([len(r[0]) for r in rows] + [28]) + 2
-    rule = "─" * (lw + 30)
-    print(f"Kapacitetsbytte, {yr} (GW)\n{rule}")
-    print(f"{'':<{lw}}{'basis':>10}{'stød':>10}{'Δ':>10}\n{rule}")
-
-    if nuc.GW_added.abs().sum() == 0:
-        print(f"  Ingen kernekraft i {yr}.")
-    for label, base, shock in rows:
-        print(f"{label:<{lw}}{f(base):>10}{f(shock):>10}{f(shock - base, True):>10}")
-    print(rule)
+    """Capacity-swap table (GW): nuclear added per area, wind removed per area, totals."""
+    nuc_label = label_of(NUCLEAR_PT)
+    wind_label = label_of(wind[0]) if len(wind) == 1 else "Vind"
+    rows = {f"{nuc_label} {r.EA}": [r.GW_base, r.GW_added, r.GW_added - r.GW_base]
+            for _, r in nuc.sort_values("EA").iterrows()}
+    for (a, p), r in cut.groupby(["EA", "Pt"])[["GW_base", "GW_cut"]].sum().iterrows():
+        rows[f"{label_of(p)} {a}"] = [r.GW_base, r.GW_base - r.GW_cut, -r.GW_cut]
+    n = len(rows)
 
     d_nuc = float((nuc.GW_added - nuc.GW_base).sum())
     d_wind = float(-cut.GW_cut.sum())
-    wind_label = col_names.get(wind[0], "Vind") if len(wind) == 1 else "Vind"
-    print(f"{f'  {nuc_label} i alt':<{lw + 20}}{f(d_nuc, True):>10}")
-    print(f"{f'  {wind_label} i alt':<{lw + 20}}{f(d_wind, True):>10}")
-    if d_nuc > 0:
-        print(f"{f'  {wind_label} fjernet pr. GW {nuc_label.lower()}':<{lw + 20}}"
-              f"{f(-d_wind / d_nuc):>10}")
+    rows[f"{nuc_label} i alt"] = [None, None, d_nuc]
+    rows[f"{wind_label} i alt"] = [None, None, d_wind]
     if nuc.GW_heat.abs().sum() > 0:
-        print(f"{f'  {nuc_label}, varme (GW-th)':<{lw + 20}}{f(nuc.GW_heat.sum(), True):>10}")
-    print(rule)
+        rows[f"{nuc_label}, varme (GW-th)"] = [None, None, float(nuc.GW_heat.sum())]
+
+    notes = []
+    if nuc.GW_added.abs().sum() == 0:
+        notes.append(f"Ingen kernekraft i {yr}.")
+    if d_nuc > 0:
+        notes.append(f"{wind_label} fjernet pr. GW {nuc_label.lower()}: {dk_num(-d_wind / d_nuc, 2)}")
+    print_table(pd.DataFrame(list(rows.values()), index=list(rows), dtype=object),
+                [",.2f", ",.2f", "+,.2f"],
+                heads=[STATE_SHORT["baseline"], STATE_SHORT["shock"], "Δ"], rules=[n],
+                title=f"Kapacitetsbytte — {yr}", unit="GW", notes=notes)
 
 
 def swap_deltas(nuc, cut, *, include_heat=True):
@@ -365,3 +359,16 @@ def lcoe_table(db, *, year, areas=c_aggs["DK"], r=R, units=None, idc=None,
     out.index.name = "tech"
     out.attrs.update(year=year, areas=tuple(areas), r=r, unit="øre/kWh")
     return out
+
+
+def print_lcoe(db, *, year, areas=c_aggs["DK"], r=R, **kw):
+    """LCOE table per technology, VRE row last (øre/kWh)."""
+    t = lcoe_table(db, year=year, areas=areas, r=r, **kw)
+    out = t.assign(CF=100 * t["CF"])
+    names = {k: label_of(v if k == "KK" else k) for k, v in LCOE_TECHS.items()}
+    out.index = [names.get(k, k) for k in t.index]
+    rate = r if isinstance(r, str) else f"{dk_num(100 * r, 1)} pct."
+    print_table(out[["CF", "annuitet", "FOM", "MC", "LCOE"]], ",.1f",
+                heads=["kap.faktor (pct.)", "annuitet", "FOM", "MC", "LCOE"],
+                rules=[len(out) - 1],
+                title=f"LCOE — {area_label(areas)}, {year}, rente: {rate}", unit="øre/kWh")

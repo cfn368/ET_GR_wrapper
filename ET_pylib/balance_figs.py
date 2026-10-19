@@ -18,7 +18,7 @@ from .groups import (
     META_COLS, META_COLS_HA, COL_ORDER, PT_COLS, EA_ORDER, EA_cols, NUCLEAR_PT,
     STATE_BASE, STATES, c_aggs_countries,
 )
-from .style import FIG_TEXT, STATE_LABELS, color_of, label_of, col_names
+from .style import FIG_TEXT, STATE_LABELS, color_of, label_of, col_names, print_table
 from .plot_base import new_figure, frame_panels, bottom_legend, finish_fixed, area_panel, price_twin
 
 TITLE_X = 0.124
@@ -172,7 +172,8 @@ def _plot_balance(ctx, area, *, market, hatched, years, sort_by, legend_min_twh,
         annual = _annual_twh([_for_area(d[s], area, [year], market.area_key)
                               for d in (supply_dict, demand_dict) for s in STATES], series)
         if verbose:
-            print(f"{area} {year} årlig TWh:", {s: round(annual[s], 4) for s in series})
+            print_table(pd.DataFrame({"TWh": annual}).rename(index=label_of), ",.2f",
+                        title=f"Årlig energi pr. serie — {label_of(area)}, {year}", unit="TWh")
         keep = [annual[s] >= legend_min_twh for s in series]
         _finish_pair(
             fig, axes, [hd for hd, k in zip(handles, keep) if k],

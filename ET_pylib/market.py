@@ -17,9 +17,8 @@ from .groups import (
     c_aggs, EA_TO_COUNTRY, DCIIA_TYPES, DH_DCIIA_TYPES, ANALYSIS_YEAR,
     NUCLEAR_PT, NUCLEAR_IDS, PT_RENAME, STATES,
 )
-from ._util import (
-    filter_years, years_list, level_isin, relabel_nuclear, cluster_members, print_table,
-)
+from .style import STATE_SHORT, TOTAL_LABEL, print_table, label_of, area_label
+from ._util import filter_years, years_list, level_isin, relabel_nuclear, cluster_members
 
 HOURS_PER_YEAR = 8760.0
 
@@ -220,22 +219,6 @@ def terms_of_trade_partner(ctx, *, country="DK", years=ANALYSIS_YEAR, include_to
     return out
 
 
-def print_terms_of_trade_partner(ctx, *, country="DK", years=ANALYSIS_YEAR, include_total=True):
-    """Bilateral terms-of-trade table, one row per partner."""
-    yr = years if isinstance(years, int) else "+".join(map(str, years))
-    print_table(
-        terms_of_trade_partner(ctx, country=country, years=years, include_total=include_total),
-        _TOT_COLS,
-        ["X(b)", "X(s)", "M(b)", "M(s)", "pX(b)", "pX(s)", "pM(b)", "pM(s)",
-         "ToT(b)", "ToT(s)", "ΔToT", "%Δ"],
-        [",.2f", ",.2f", ",.2f", ",.2f", ",.0f", ",.0f", ",.0f", ",.0f",
-         ".3f", ".3f", "+.3f", "+.2f"],
-        title=(f"Terms of trade, {country} per partner — {yr}  "
-               f"(X/M in TWh, pX/pM in DKK/MWh, ToT = pX/pM)"),
-        w=8, rule_before="TOTAL", blank=False,
-    )
-
-
 # ==================== ==================== ==================== ====================
 # 4. capture prices and capacity factors (electricity and district heat)
 
@@ -433,39 +416,112 @@ def heat_capacity_factor_summary(ctx, ea=None, *, country=None, years=ANALYSIS_Y
     return _capacity_factor_summary(ctx, DH_SPEC, ea, country, years, pts)
 
 
-def _slice_for_print(df, region):
-    if region is not None:
-        df = df.xs(region, level="region")
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.droplevel([n for n in df.index.names if n != "Pt"])
-    return df
+# ==================== ==================== ==================== ====================
+# 5. printers
+
+def _year_tag(years):
+    return str(years) if isinstance(years, int) else "+".join(map(str, years))
 
 
-def print_capture(cap, *, region=None, year=None, spec=EL_SPEC):
-    """Capture-price table by Pt."""
-    cols = ["gen_basel", "gen_shock", "dGen",
-            "capture_basel", "capture_shock", "dCapture", "dVf"]
-    df = _slice_for_print(cap, region)[cols].sort_values("gen_basel", ascending=False)
-    yr_ = f"{year}, " if year is not None else ""
+def _region_of(wide, region):
+    """Row frame for one region of a (region, Pt) frame, and its Danish label."""
+    if region is None:
+        region = wide.index.get_level_values("region")[0]
+    return wide.xs(region, level="region"), area_label(region)
+
+
+def print_price_summary(ctx, *, eas=(), countries=(), years=ANALYSIS_YEAR):
+    """Price moments and scarcity hours, one block of baseline/shock rows per area."""
+    frames = ([full_summary(ctx, ea=e, years=years) for e in eas]
+              + [full_summary(ctx, country=c, years=years) for c in countries])
+    df = pd.concat(frames)
+    df.index = [f"{area_label(r)}, {STATE_SHORT[s]}" for r, s in df.index]
+    cols = ["mean", "min", "max", "std", "skew", "exkurt", "nulpristime", "mangeltime"]
     print_table(
-        df, cols,
-        ["TWh basis", "TWh stød", "ΔTWh", "fangst basis", "fangst stød", "Δfangst", "ΔVF"],
-        ",.2f", w=13, nan="—", total=["gen_basel", "gen_shock", "dGen"],
-        title=f"Capture price ({spec.noun}) — {yr_}{region or 'alle'}  (GWh / DKK per MWh)",
+        df[cols], [",.1f"] * 4 + [",.2f"] * 2 + [",.1f"] * 2,
+        heads=["gns.", "min.", "maks.", "std.afv.", "skævhed", "kurtose", "nulpris", "mangel"],
+        groups=["Pris (kr./MWh)"] * 4 + ["Fordeling"] * 2 + ["Timer (pct.)"] * 2,
+        rules=range(2, len(df), 2),
+        title=f"Priser og knaphed — {_year_tag(years)}",
     )
 
 
-def print_capacity_factor(cf, *, region=None, year=None, spec=EL_SPEC, unit="GWh"):
-    """Capacity-factor table by Pt."""
-    cols = ["realized_basel", "realized_shock", "dRealized",
-            "cap_factor_basel", "cap_factor_shock", "dCapFactor"]
-    df = _slice_for_print(cf, region)[cols].sort_values("realized_basel", ascending=False)
-    yr_ = f"{year}, " if year is not None else ""
+def print_trade_summary(ctx, *, countries=("DK",), years=ANALYSIS_YEAR):
+    """Trade by partner per country: export, import and net (TWh), net value (mio. kr.)."""
+    for country in countries:
+        ts = full_trade_summary(ctx, country=country, years=years)
+        partners = [p for p in ts.index.get_level_values("partner").unique() if p != "TOTAL"]
+        rows = {}
+        for p in partners + ["TOTAL"]:
+            b, s = ts.loc[(p, "baseline")], ts.loc[(p, "shock")]
+            rows[TOTAL_LABEL if p == "TOTAL" else label_of(p)] = [
+                b["export_TWh"], s["export_TWh"], b["import_TWh"], s["import_TWh"],
+                b["net_TWh"], s["net_TWh"], s["net_TWh"] - b["net_TWh"],
+                b["net_mDKK"], s["net_mDKK"], s["net_mDKK"] - b["net_mDKK"],
+            ]
+        print_table(
+            pd.DataFrame.from_dict(rows, orient="index"),
+            [",.2f"] * 6 + ["+,.2f", ",.0f", ",.0f", "+,.0f"],
+            heads=["basis", "stød"] * 3 + ["Δ", "basis", "stød", "Δ"],
+            groups=(["Eksport (TWh)"] * 2 + ["Import (TWh)"] * 2
+                    + ["Netto (TWh)"] * 3 + ["Netto (mio. kr.)"] * 3),
+            rules=[len(partners)],
+            title=f"Handel — {area_label(country)}, {_year_tag(years)}",
+        )
+
+
+def print_terms_of_trade_partner(ctx, *, country="DK", years=ANALYSIS_YEAR, include_total=True):
+    """Bilateral terms of trade, one row per partner, the national total last."""
+    tot = terms_of_trade_partner(ctx, country=country, years=years, include_total=include_total)
+    tot.index = [TOTAL_LABEL if p == "TOTAL" else label_of(p) for p in tot.index]
     print_table(
-        df, cols, ["basis", "stød", "Δ", "CF basis", "CF stød", "ΔCF"],
-        ",.1f", w=12, nan="—", total=["realized_basel", "realized_shock", "dRealized"],
-        title=(f"Capacity factor ({spec.noun}, {spec.cap_sym}) — "
-               f"{yr_}{region or 'alle'}  ({unit} / pct.)"),
+        tot[_TOT_COLS], [",.2f"] * 4 + [",.0f"] * 4 + [".3f", ".3f", "+.3f", "+.1f"],
+        heads=["basis", "stød"] * 5 + ["Δ", "Δ pct."],
+        groups=(["Eksport (TWh)"] * 2 + ["Import (TWh)"] * 2 + ["Eksportpris"] * 2
+                + ["Importpris"] * 2 + ["Bytteforhold"] * 4),
+        rules=[len(tot) - 1] if include_total else (),
+        title=f"Bytteforhold pr. handelspartner — {area_label(country)}, {_year_tag(years)}",
+        notes=["Priser i kr./MWh. Bytteforhold = eksportpris / importpris."],
+    )
+
+
+def print_capture(cap, *, region=None, year=None, spec=EL_SPEC):
+    """Capture price and value factor by plant type."""
+    df, label = _region_of(cap, region)
+    df = df.sort_values("gen_basel", ascending=False)
+    out = pd.DataFrame({
+        "gb": df["gen_basel"] / 1000, "gs": df["gen_shock"] / 1000, "dg": df["dGen"] / 1000,
+        "cb": df["capture_basel"], "cs": df["capture_shock"], "dc": df["dCapture"],
+        "dv": df["dVf"],
+    })
+    out.index = [label_of(p) for p in df.index]
+    print_table(
+        out, [",.2f", ",.2f", "+,.2f", ",.1f", ",.1f", "+,.1f", "+.2f"],
+        heads=["basis", "stød", "Δ"] * 2 + ["Δ"],
+        groups=["Produktion (TWh)"] * 3 + ["Fangstpris (kr./MWh)"] * 3 + ["Værdifaktor"],
+        total=["gb", "gs", "dg"],
+        title=(f"Fangstpris og værdifaktor, {spec.noun} — {label}"
+               + (f", {year}" if year is not None else "")),
+    )
+
+
+def print_capacity_factor(cf, *, region=None, year=None, spec=EL_SPEC):
+    """Realised production and capacity factor by plant type."""
+    df, label = _region_of(cf, region)
+    df = df.sort_values("realized_basel", ascending=False)
+    out = pd.DataFrame({
+        "rb": df["realized_basel"] / 1000, "rs": df["realized_shock"] / 1000,
+        "dr": df["dRealized"] / 1000,
+        "cb": df["cap_factor_basel"], "cs": df["cap_factor_shock"], "dc": df["dCapFactor"],
+    })
+    out.index = [label_of(p) for p in df.index]
+    print_table(
+        out, [",.2f", ",.2f", "+,.2f", ",.1f", ",.1f", "+,.1f"],
+        heads=["basis", "stød", "Δ"] * 2,
+        groups=["Produktion (TWh)"] * 3 + [f"Kapacitetsfaktor (pct., {spec.cap_sym})"] * 3,
+        total=["rb", "rs", "dr"],
+        title=(f"Kapacitetsfaktor, {spec.noun} — {label}"
+               + (f", {year}" if year is not None else "")),
     )
 
 

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 
-from .groups import NUCLEAR_PT, PARTNER_ORDER
+import pandas as pd
+
+from .groups import NUCLEAR_PT, PARTNER_ORDER, c_aggs
 
 
 # ==================== ==================== ==================== ====================
@@ -18,6 +20,7 @@ from .groups import NUCLEAR_PT, PARTNER_ORDER
 
 STATE_BASE_LABEL = "Basisforløb"
 STATE_LABELS     = {"baseline": STATE_BASE_LABEL, "shock": "Stød"}
+STATE_SHORT      = {"baseline": "basis", "shock": "stød"}      # column heads of printed tables
 
 SCENARIO_LABELS = {
     "stød":   "Stødforløb",
@@ -259,11 +262,23 @@ FIG_TEXT = {
 }
 
 
+def _dk_swap(txt):
+    return txt.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
 def dk_num(value, decimals: int = 0, signed: bool = False) -> str:
     """Danish number format: '.' thousands, ',' decimal; sign taken from value < 0."""
-    txt = f"{abs(value):,.{decimals}f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
     sign = "-" if value < 0 else ("+" if signed else "")
-    return sign + txt
+    return sign + _dk_swap(f"{abs(value):,.{decimals}f}")
+
+
+def area_label(areas):
+    """Danish name of an area scope: a known aggregate by name, else its zones."""
+    areas = (areas,) if isinstance(areas, str) else tuple(areas)
+    for name, members in c_aggs.items():
+        if set(members) == set(areas):
+            return col_names.get(name, name)
+    return col_names.get(areas[0], areas[0]) if len(areas) == 1 else "+".join(areas)
 
 
 def price_bin_labels(n_bins):
@@ -273,8 +288,89 @@ def price_bin_labels(n_bins):
             for lo, hi in zip(edges[:-1], edges[1:])]
 
 
+
 # ==================== ==================== ==================== ====================
-# 2. colours
+# 2. printed tables
+
+TOTAL_LABEL = "I alt"
+
+
+def print_table(df, fmts, *, title, unit=None, heads=None, groups=None, total=None,
+                rules=(), notes=(), nan="—"):
+    """The one printed-table layout: title (unit), optional group header, column
+    header, rule, rows, rule, optional 'I alt' row, notes, blank line. The index
+    holds the Danish row labels; numbers in Danish format.
+
+    `fmts` is one format spec, a list per column or a dict by column; `heads` the
+    column headers (default: column names); `groups` a group name per column
+    (consecutive equal names share a centred header); `total` None, "all" or the
+    columns to total; `rules` row positions to put a rule before; `notes` lines
+    printed under the table. None cells print blank."""
+    cols = list(df.columns)
+    if isinstance(fmts, str):
+        fmts = [fmts] * len(cols)
+    elif isinstance(fmts, dict):
+        fmts = [fmts[c] for c in cols]
+    heads = [str(c) for c in cols] if heads is None else list(heads)
+
+    def cell(v, f):
+        if v is None:
+            return ""
+        if pd.isna(v):
+            return nan
+        return _dk_swap(format(v, f))
+
+    body = [[cell(v, f) for v, f in zip(row, fmts)] for row in df.itertuples(index=False)]
+    labels = [str(k) for k in df.index]
+    tot = None
+    if total is not None:
+        tcols = cols if total == "all" else list(total)
+        sums = df[tcols].sum()
+        tot = [cell(sums[c], f) if c in tcols else "" for c, f in zip(cols, fmts)]
+
+    rows_all = body + ([tot] if tot else [])
+    widths = [max([len(h)] + [len(r[j]) for r in rows_all]) + 2 for j, h in enumerate(heads)]
+    if groups is not None:
+        j = 0
+        while j < len(cols):                         # widen columns so group names fit
+            k = j
+            while k + 1 < len(cols) and groups[k + 1] == groups[j]:
+                k += 1
+            need = len(groups[j]) + 2 - sum(widths[j:k + 1])
+            if need > 0:                             # spread the extra width over the group
+                for i in range(j, k + 1):
+                    widths[i] += need // (k - j + 1)
+                widths[k] += need % (k - j + 1)
+            j = k + 1
+    label_w = max([len(l) for l in labels] + [len(TOTAL_LABEL) if tot else 0, 4]) + 2
+    rule = "─" * (label_w + sum(widths))
+
+    out = [f"{title} ({unit})" if unit else title]
+    if groups is not None:
+        line, j = " " * label_w, 0
+        while j < len(cols):
+            k = j
+            while k + 1 < len(cols) and groups[k + 1] == groups[j]:
+                k += 1
+            span = sum(widths[j:k + 1])
+            line += (groups[j] or "").center(span)
+            j = k + 1
+        out.append(line.rstrip())
+    out.append(" " * label_w + "".join(h.rjust(w) for h, w in zip(heads, widths)))
+    out.append(rule)
+    for i, (lab, r) in enumerate(zip(labels, body)):
+        if i in rules:
+            out.append(rule)
+        out.append(lab.ljust(label_w) + "".join(c.rjust(w) for c, w in zip(r, widths)))
+    out.append(rule)
+    if tot:
+        out.append(TOTAL_LABEL.ljust(label_w) + "".join(c.rjust(w) for c, w in zip(tot, widths)))
+    out += list(notes)
+    print("\n".join(out) + "\n")
+
+
+# ==================== ==================== ==================== ====================
+# 3. colours
 
 area_colors = {
     # plant types
@@ -347,7 +443,7 @@ def label_of(key, names=col_names):
 
 
 # ==================== ==================== ==================== ====================
-# 3. figure style
+# 4. figure style
 
 BG_COLOR      = "#E8EDEF"      # figure/axes fill, replacing white + boxed frame
 TEXT_COLOR    = "#2F3C41"

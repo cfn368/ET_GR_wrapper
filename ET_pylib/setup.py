@@ -20,25 +20,26 @@ from ET_pylib.groups import (
     ANALYSIS_YEAR, NUCLEAR_IDS, NUCLEAR_IDS_BY_GEO, use_geography,
     c_aggs, c_aggs_countries, EA_TO_COUNTRY, STATES,
 )
-from ET_pylib.style import set_aej, col_names, area_colors, FIG_TEXT
+from ET_pylib.style import set_aej, col_names, area_colors, FIG_TEXT, print_table
 from ET_pylib.balance import (
     ElBalanceContext, build_el_balance_data, build_el_balance_data_country, build_dh_balance_data,
 )
 from ET_pylib.market import (
     price_summary, scarcity_summary, full_summary, trade_summary, full_trade_summary,
-    terms_of_trade_partner, print_terms_of_trade_partner,
+    terms_of_trade_partner, print_terms_of_trade_partner, print_price_summary,
+    print_trade_summary,
     capture_summary, capacity_factor_summary, print_capture, print_capacity_factor,
     heat_capture_summary, heat_capacity_factor_summary,
     print_heat_capture, print_heat_capacity_factor,
 )
 from ET_pylib.costs import (
-    nuc_wind_swap, swap_deltas, plant_cost, annuity_by_tech, annuity_factor,
-    lcoe_inputs, lcoe_table,
+    nuc_wind_swap, print_swap, swap_deltas, plant_cost, annuity_by_tech, annuity_factor,
+    lcoe_inputs, lcoe_table, print_lcoe,
 )
 from ET_pylib.welfare import (
     consumer_surplus, print_cs_table, producer_profit, producer_generation,
     profit_decomposition, print_producer_profit, print_producer_qty,
-    ci_by_country, nuc_flex_value, welfare_levels, cs_by_price_bin,
+    ci_by_country, print_ci, nuc_flex_value, print_flex, welfare_levels, cs_by_price_bin,
     welfare_block, welfare_block_by_rate, print_welfare_blocks,
 )
 from ET_pylib.balance_figs import (

@@ -1,6 +1,6 @@
 """
-Shared helpers — database access, year filtering, id maps and table printing
-=============================================================================
+Shared helpers — database access, year filtering and id maps
+=============================================================
 
 Every module reads the solved GpyDB pickles through these helpers, so a symbol
 is fetched, year-filtered and mapped to plant type / area in one way only.
@@ -149,34 +149,3 @@ def equal_hour_bins(x, w, n_bins):
     mid = ws.cumsum() - ws / 2
     b = np.minimum((mid / ws.sum() * n_bins).astype(int), n_bins - 1)
     return pd.Series(np.asarray(b), index=o).reindex(x.index)
-
-
-# ==================== ==================== ==================== ====================
-# 4. table printing
-
-def print_table(df, cols, heads, fmts, *, title, w, label_w=6, total=None,
-                rule_before=None, nan=None, blank=True):
-    """Right-aligned table: title, header, rule, one row per index key, rule, and
-    optionally a total row. `fmts` is one format spec or one per column; `total`
-    is None, "all" or the columns to total; `nan` replaces missing cells."""
-    fmts = [fmts] * len(cols) if isinstance(fmts, str) else list(fmts)
-    cell = lambda v, f: (f"{nan:>{w}}" if nan is not None and pd.isna(v)
-                         else f"{format(v, f):>{w}}")
-    print(title)
-    hdr = f'{"":<{label_w + 2}}' + "".join(f"{h:>{w}}" for h in heads)
-    rule = "  " + "─" * (len(hdr) - 2)
-    print(hdr)
-    print(rule)
-    for key, row in df.iterrows():
-        if rule_before is not None and key == rule_before:
-            print(rule)
-        print(f"  {key:<{label_w}}" + "".join(cell(row[c], f) for c, f in zip(cols, fmts)))
-    print(rule)
-    if total is not None:
-        tcols = list(cols) if total == "all" else list(total)
-        tot = df[tcols].sum()
-        print(f'  {"Total":<{label_w}}' + "".join(
-            f"{format(tot[c], f):>{w}}" if c in tcols else f'{"":>{w}}'
-            for c, f in zip(cols, fmts)))
-    if blank:
-        print()

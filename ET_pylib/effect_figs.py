@@ -19,7 +19,7 @@ from .groups import (
 from .style import (
     FIG_TEXT, FIGSIZE_WIDE, STATE_COLORS, STATE_LABELS, DELTA_COLORS, PT_AGG_COLORS,
     NX_COMP_COLORS, WELFARE_COLORS, WELFARE_COMP_LABELS, PRICE_STAT_LABELS,
-    TRADE_COMP_LABELS, MISSING_COLOR, area_colors, col_names,
+    TRADE_COMP_LABELS, MISSING_COLOR, TOTAL_LABEL, area_colors, col_names, label_of, print_table,
 )
 from .market import price_summary, full_trade_summary, capture_summary
 from .welfare import producer_profit, producer_generation, welfare_levels, cs_by_price_bin
@@ -188,7 +188,10 @@ def _plot_levels(df, stat, *, title, ylabel, decimals, figsize, bar_width, legen
     """Grouped baseline/shock bars over regions."""
     labels, vals = _pivot(df, stat)
     if verbose:
-        print(df.round(2))
+        out = pd.DataFrame(vals, index=[label_of(r) for r in labels])
+        out["d"] = out["shock"] - out["baseline"]
+        print_table(out, [",.2f", ",.2f", "+,.2f"], heads=["basis", "stød", "Δ"],
+                    title=title, unit=ylabel)
     return plot_grouped(
         labels, vals, colors=STATE_COLORS, series_labels=STATE_LABELS,
         title=title, ylabel=ylabel, decimals=decimals, figsize=figsize,
@@ -360,22 +363,24 @@ def plot_price_delta(ctx, regions=None, *, years=ANALYSIS_YEAR, stats=("mean",),
 
     fig, axes = new_figure(1, len(stats), figsize=figsize, squeeze=False)
     axes = axes.ravel()
+    unit = FIG_TEXT["unit_pct" if relative else "unit_price_ore"]
+    deltas = {}
     for ax, stat in zip(axes, stats):
         labels, vals = _pivot(df, stat)
         base, shock = vals["baseline"], vals["shock"]
         d = 100.0 * (shock - base) / base if relative else shock - base
         signed_bars(ax, labels, d, [DELTA_COLORS["up" if v >= 0 else "down"] for v in d],
-                    bar_width=bar_width, decimals=decimals,
-                    ylabel=FIG_TEXT["unit_pct" if relative else "unit_price_ore"])
+                    bar_width=bar_width, decimals=decimals, ylabel=unit)
         ax.set_title(PRICE_STAT_LABELS.get(stat, stat), loc="left", pad=2)
-        if verbose:
-            print(stat, dict(zip(labels, np.round(d, 3))))
+        deltas[PRICE_STAT_LABELS.get(stat, stat)] = pd.Series(d, index=[label_of(r) for r in labels])
 
-    finish(fig, show=show, save_path=save_path, rect=(0, 0.02, 1, 1.05),
-           title=FIG_TEXT["title_price_delta"].format(
-               year=year_label(years),
-               unit=FIG_TEXT["delta_rel" if relative else "delta_abs"],
-               note=FIG_TEXT["delta_note"]))
+    title = FIG_TEXT["title_price_delta"].format(
+        year=year_label(years), unit=FIG_TEXT["delta_rel" if relative else "delta_abs"],
+        note=FIG_TEXT["delta_note"])
+    if verbose:
+        print_table(pd.DataFrame(deltas), "+,.2f", unit=unit,
+                    title=f"Prisændring, {FIG_TEXT['delta_note']} — {year_label(years)}")
+    finish(fig, show=show, save_path=save_path, rect=(0, 0.02, 1, 1.05), title=title)
     return fig, tuple(axes)
 
 
@@ -461,8 +466,11 @@ def plot_cs_by_price_bin(baseline_output, shock_output, regions=None, *, year=AN
     per region. Bins sum to the ΔCS of `plot_welfare_levels` (markets=("E",))."""
     df = cs_by_price_bin(baseline_output, shock_output, regions, year=year,
                          n_bins=n_bins, cs_scale=cs_scale)
+    title = FIG_TEXT["title_cs_price_bin"].format(year=year_label(year))
     if verbose:
-        print(df.assign(total=df.sum(axis=1)).round(3))
+        out = df.assign(**{TOTAL_LABEL: df.sum(axis=1)})
+        out.index = [label_of(r) for r in df.index]
+        print_table(out, "+,.1f", title=title, unit=FIG_TEXT["unit_value_mio"])
 
     fig, ax = new_figure(figsize=figsize)
     handles, leg_labels = draw_grouped(
@@ -473,6 +481,5 @@ def plot_cs_by_price_bin(baseline_output, shock_output, regions=None, *, year=AN
     )
     ax.set_xlabel(FIG_TEXT["price_bin_axis"], loc="left")
     bottom_legend(fig, handles, leg_labels, legend_y=legend_y, ncol=min(len(df), 4))
-    finish(fig, title=FIG_TEXT["title_cs_price_bin"].format(year=year_label(year)),
-           save_path=save_path, show=show)
+    finish(fig, title=title, save_path=save_path, show=show)
     return fig, ax

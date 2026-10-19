@@ -54,19 +54,23 @@ Genstart kernelen, hvis moduler er omdøbt eller flyttet.
 
 ## ET_pylib
 
-Imports går kun nedad i lagene:
+Modulerne står i lagrækkefølge, og imports går kun nedad:
 
-| lag | modul | indhold |
-|---|---|---|
-| konventioner | `groups.py` | zoner, aggregater, kernekraft-id'er, omdøbninger |
-| | `style.py` | danske labels, farver, `FIG_TEXT`, `dk_num`, `print_table` |
-| hjælpere | `_util.py` | db-adgang, årsfilter, id-maps, aktive linjer, prisbins |
-| data | `balance.py` | timebalancer pr. zone, Danmark og fjernvarme (`ElBalanceContext`) |
-| | `market.py` | priser, knaphed, handel, bytteforhold, fangstpris, kapacitetsfaktor |
-| | `costs.py` | kapacitetsbytte, byggerenter, annuitet, systemomkostning, LCOE |
-| | `welfare.py` | ΔCS, ΔPS, flaskehalsindtægt, fleksibilitet, velfærdsblok |
-| figurer | `plot_base.py`, `effect_figs.py`, `balance_figs.py`, `price_figs.py` | |
-| notebook | `setup.py` | preamble, stier, `load_run` |
+```
+ET_pylib/
+├── groups.py         zoner, aggregater, kernekraft-id'er, omdøbninger
+├── style.py          danske labels, farver, FIG_TEXT, dk_num, print_table
+├── _util.py          db-adgang, årsfilter, id-maps, aktive linjer, prisbins
+├── balance.py        timebalancer pr. zone, Danmark og fjernvarme (ElBalanceContext)
+├── market.py         priser, knaphed, handel, bytteforhold, fangstpris, kapacitetsfaktor
+├── costs.py          kapacitetsbytte, byggerenter, annuitet, systemomkostning, LCOE
+├── welfare.py        ΔCS, ΔPS, flaskehalsindtægt, fleksibilitet, velfærdsblok
+├── plot_base.py      fælles figurmøblement
+├── effect_figs.py    søjlefigurer pr. region
+├── balance_figs.py   timesorterede balance- og nettoeksportfigurer
+├── price_figs.py     prisændring pr. time og ΔCS pr. prisbin
+└── setup.py          preamble, stier, load_run
+```
 
 ## Konventioner
 

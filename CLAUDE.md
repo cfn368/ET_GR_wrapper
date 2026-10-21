@@ -7,30 +7,28 @@ This file holds what the code does not say.
 ## Scope
 
 - **The model never runs here.** Shocks are solved in ETT's copy of DREAM's
-  `2_Analysis.ipynb` on the Q: drive. This repo only reads the solved pickles in
+  `2_Analysis.ipynb` on the shared model drive. This repo only reads the solved pickles in
   `ET_intermediate/<run>/`. No GAMS licence, no `pyGRE`. Don't add code paths that need either.
 - **DREAM's code stays out.** No `pyGRE`, DREAM notebooks or model files in the repo.
   `ET_shocks/nucShock.py` imports `pyGRE` only inside its solve functions, so it imports
   cleanly here. Keep it that way.
-- **`ET_shocks/` runs on Q:.** `nucShock.py` imports `ET_pylib.groups` and `ET_pylib.costs`.
-  Any change to those names breaks the Q: copy unless `ET_pylib` is synced with it. Say so
-  when a change touches them.
+- **`ET_shocks/` runs next to the model.** `nucShock.py` imports `ET_pylib.groups` and
+  `ET_pylib.costs`. Any change to those names breaks the copy on the model drive unless
+  `ET_pylib` is synced with it. Say so when a change touches them.
 - DREAM's fixed parameters (`sigmaID`, `sigmaCEt`, `sigmaCHt`, `pE_min`) are not touched.
 
 ## Environment
 
-- Kernel "Python 3.13 (GR post)" (`gr-post`) = Anaconda base,
-  `C:\Users\LinusLindquist\anaconda3\python.exe`. It has `pyDatabases==0.2.1` and
-  `gamsapi==54.2.2`. The system Python 3.13.6 and GAMS's `GMSPython` are not the working env.
-- The shell is Git Bash on Windows:
-  - Set `PYTHONIOENCODING=utf-8` on any Python command that prints Danish text or `─`, `Δ`, `—`.
-    Otherwise stdout is cp1252 and the command crashes.
-  - Heredocs mangle backslashes (`\\`, `\n`). Write Python scripts with the Write tool and
-    run the file. Don't pipe them through `<<'EOF'` when they contain backslashes or LaTeX.
-  - The repo sits in a OneDrive/SharePoint-synced folder. Git can fail with "short read
-    while indexing" when sync touches a file. Retry.
-- Linus works in the same notebooks in VS Code. Before overwriting a notebook, check
-  `git status` and diff the sources for his edits. Build on them, never drop them.
+- Python 3.13 with the packages listed in `README.md`; notebooks run on the Jupyter kernel
+  registered there (`gr-post`). Use the interpreter behind that kernel for scripts too.
+  The Python that ships with GAMS is not the working environment.
+- On Windows, set `PYTHONIOENCODING=utf-8` for any Python command whose output contains
+  Danish text or `─`, `Δ`, `—`. Otherwise the console encoding can make it crash.
+- Write multi-line Python scripts to a file and run the file. Shell heredocs can mangle
+  backslashes, which breaks LaTeX and escape sequences.
+- The notebooks may be open and edited in an editor while you work. Before overwriting a
+  notebook, check `git status` and diff the sources for the user's edits. Build on them,
+  never drop them.
 
 ## Architecture rules
 
@@ -57,7 +55,9 @@ This file holds what the code does not say.
 - **Fail loudly.** Raise on unknown areas, unmapped ids, empty year cuts and merge
   holes. No `try/except` fallbacks that degrade silently, no compatibility shims.
 - Code, identifiers, docstrings and commits are in English. Everything rendered is Danish.
-  Module and docstring format follows Linus's `pyfile-style` skill.
+  Each module opens with a docstring (title, `=` underline, one paragraph); sections are
+  marked `# ==================== ...` followed by `# N. name`; function docstrings are two
+  to four lines, without `Args:`/`Returns:` blocks.
 
 ## Model conventions (easy to get wrong)
 
@@ -84,7 +84,7 @@ can be compared byte for byte:
 1. Before the change, execute both notebooks headless with `nbclient` on kernel `gr-post`
    (cwd = repo root). Save every code cell's text output and an md5 of each `image/png`.
 2. After the change, run again and diff per code cell. Any difference must be explained:
-   an intended change or one of Linus's notebook edits.
+   an intended change or one of the user's notebook edits.
 3. Functions no notebook calls (the district-heat path: `build_dh_balance_data`,
    `heat_*`, `plot_energy_balance_dh`) need their own before/after check on frames.
 4. Lint with `python -m pyflakes ET_pylib/*.py` (unused imports in `setup.py` are intended).
@@ -94,7 +94,7 @@ Both notebooks together take about 1.5 minutes. Run them in the background.
 ## Notebooks
 
 - First cell is always `from ET_pylib.setup import *` / `setup_notebook()`.
-- Linus's `notebook-style` skill, kept minimal: one H1 with a short intro, `*\`n. label\`*`
+- Minimal markdown: one H1 with a short intro, `*\`n. label\`*`
   sub-sections, one italic descriptor line before each code cell, and a matching
   `# n. label` comment.
 - End plot-only cells with `;` so figure reprs don't print.
@@ -102,8 +102,8 @@ Both notebooks together take about 1.5 minutes. Run them in the background.
 
 ## Git
 
-- Work on a branch and commit in small, described steps. Linus merges and pushes himself
-  (GitHub `cfn368/ET_GR_wrapper`).
+- Work on a branch and commit in small, described steps. The maintainer merges and pushes;
+  don't push or merge into `main` yourself.
 - Pickles, gdx and g00 files stay out of git (`.gitignore`).
 
 ## Open points

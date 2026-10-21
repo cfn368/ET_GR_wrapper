@@ -40,7 +40,7 @@ from ET_pylib.welfare import (
     consumer_surplus, print_cs_table, producer_profit, producer_generation,
     profit_decomposition, print_producer_profit, print_producer_qty,
     ci_by_country, print_ci, nuc_flex_value, print_flex, welfare_levels, cs_by_price_bin,
-    welfare_block, welfare_block_by_rate, print_welfare_blocks,
+    welfare_block, welfare_block_by_rate, print_welfare_blocks, welfare_by_syscost_gap,
 )
 from ET_pylib.balance_figs import (
     build_supply_shares, plot_energy_balance_el, plot_energy_balance_dh, plot_net_export,
@@ -50,7 +50,7 @@ from ET_pylib.effect_figs import (
     plot_price_levels, plot_price_delta, plot_trade_levels, plot_trade_delta_by_partner,
     plot_nx_delta_by_pt, plot_capture_delta_by_pt, plot_welfare_levels,
     plot_generation_stack, plot_profit_stack, plot_generation_delta, plot_profit_delta,
-    plot_cs_by_price_bin,
+    plot_cs_by_price_bin, plot_welfare_by_syscost_gap,
 )
 from ET_pylib.price_figs import plot_price_change_and_cs, plot_price_change_scatter
 

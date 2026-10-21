@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import FuncFormatter
 
 from .groups import (
     STATES, REGION_ORDER, PARTNER_ORDER, PT_AGGS, PT_DROP, PT_AGG_ORDER,
@@ -19,12 +20,15 @@ from .groups import (
 from .style import (
     FIG_TEXT, FIGSIZE_WIDE, STATE_COLORS, STATE_LABELS, DELTA_COLORS, PT_AGG_COLORS,
     NX_COMP_COLORS, WELFARE_COLORS, WELFARE_COMP_LABELS, PRICE_STAT_LABELS,
-    TRADE_COMP_LABELS, MISSING_COLOR, TOTAL_LABEL, area_colors, col_names, label_of, print_table,
+    TRADE_COMP_LABELS, MISSING_COLOR, TOTAL_LABEL, TEXT_COLOR, area_colors, area_label,
+    col_names, dk_num, label_of, print_table,
 )
 from .market import price_summary, full_trade_summary, capture_summary
-from .welfare import producer_profit, producer_generation, welfare_levels, cs_by_price_bin
+from .welfare import (
+    producer_profit, producer_generation, welfare_levels, cs_by_price_bin, welfare_by_syscost_gap,
+)
 from .plot_base import (
-    year_label, new_figure, finish, limits, zero_line, style_panel, signed_bars,
+    year_label, new_figure, finish, limits, zero_line, style_axes, style_panel, signed_bars,
     draw_grouped, plot_grouped, bottom_legend, stack_bars, net_markers, stack_legend,
 )
 
@@ -323,6 +327,45 @@ def plot_welfare_levels(baseline_output, shock_output, *, id2Pt=None, id2EA=None
         bar_width=bar_width if bar_width else round(0.78 / len(series), 3),
         legend_y=legend_y, save_path=save_path, show=show,
     )
+
+
+def plot_welfare_by_syscost_gap(block, *, region="DK", gaps=np.arange(0.0, 25.01, 0.25),
+                                figsize=FIGSIZE_WIDE, save_path=None, show=True):
+    """Net welfare of a `welfare_block` over the VRE - nuclear system-cost gap, with
+    the block's own gap and the break-even gap marked."""
+    net = welfare_by_syscost_gap(block, gaps, region=region)
+    rates, r = block.attrs["rates"], block.attrs["r"]
+    now = rates["vre_syscost"] - rates["nuc_syscost"]
+    net_now = float(welfare_by_syscost_gap(block, now, region=region).iloc[0])
+    slope = (net.iloc[-1] - net.iloc[0]) / (net.index[-1] - net.index[0])
+    even = now - net_now / slope
+    pct = 100 * float(r) if np.isscalar(r) and not isinstance(r, str) else None
+    rate = (f"{dk_num(pct, decimals=0 if pct.is_integer() else 1)} {FIG_TEXT['unit_pct']}"
+            if pct is not None else str(r).upper())
+
+    fig, ax = new_figure(figsize=figsize)
+    style_axes(ax)
+    ax.plot(net.index, net.to_numpy(), color=STATE_COLORS["baseline"], lw=2, zorder=3)
+    zero_line(ax)
+    ax.axvline(even, color=TEXT_COLOR, lw=1, ls=":", zorder=2)
+    ax.axvline(now, color=STATE_COLORS["shock"], lw=1, ls="--", zorder=2)
+    ax.scatter([now], [net_now], color=STATE_COLORS["shock"], s=42, zorder=4)
+    y_top = ax.get_ylim()[1]
+    ax.annotate(FIG_TEXT["mark_syscost_now"].format(gap=dk_num(now, decimals=1),
+                                                    net=dk_num(net_now, decimals=0, signed=True)),
+                (now, net_now), xytext=(8, -14), textcoords="offset points",
+                fontsize=10, color=STATE_COLORS["shock"])
+    ax.annotate(FIG_TEXT["mark_syscost_even"].format(gap=dk_num(even, decimals=1)),
+                (even, y_top), xytext=(-6, -14), textcoords="offset points", ha="right",
+                fontsize=10, color=TEXT_COLOR)
+    ax.set_xlim(net.index[0], net.index[-1])
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: dk_num(v)))
+    ax.set_xlabel(FIG_TEXT["xlabel_syscost_gap"], loc="left")
+    ax.set_ylabel(FIG_TEXT["ylabel_net_welfare"], loc="bottom")
+    title = FIG_TEXT["title_syscost_gap"].format(
+        area=area_label(areas_of(region)), year=year_label(block.attrs["year"]), rate=rate)
+    finish(fig, title=title, save_path=save_path, show=show)
+    return fig, ax
 
 
 def plot_generation_stack(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,

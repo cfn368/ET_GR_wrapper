@@ -250,6 +250,12 @@ FIG_TEXT = {
     "title_welfare":      "Ændring i velfærd pr. region i {year} ({note})",
     "welfare_ci_note":    "inkl. flaskehalsindtægt",
     "welfare_net_note":   "inkl. flaskehalsindtægt og annuitet",
+    "title_syscost_gap":  "Velfærdseffekt efter forskel i systemomkostninger, {area} {year}, "
+                          "rente {rate}",
+    "xlabel_syscost_gap": "Systemomkostning, VE − kernekraft (øre/kWh)",
+    "ylabel_net_welfare": "Netto velfærdseffekt (mio. kr./år)",
+    "mark_syscost_now":   "Hovedscenarie: {gap} øre/kWh, {net} mio. kr.",
+    "mark_syscost_even":  "Ligevægt: {gap} øre/kWh",
 
     # titles: energy balance
     "title_balance_el": "Figur 1: Elbalance over året for {area} i {year}",

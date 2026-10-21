@@ -617,8 +617,20 @@ def welfare_block(baseline_output, shock_output, *, year, deltas=None, annuity=N
     block.index.name, block.columns.name = "component", "region"
     block.attrs.update(year=year, unit=unit, markets=tuple(markets), techs=tuple(items),
                        col=col, syscosts=tuple(syscosts), rates=used_rate, twh=used_twh,
-                       nuc_u_min=nuc_u_min)
+                       nuc_u_min=nuc_u_min, r=r)
     return block
+
+
+def welfare_by_syscost_gap(block, gaps, *, region="DK"):
+    """Net welfare of `block` (its unit) with the VRE system cost set to the nuclear
+    rate plus each gap (øre/kWh). The nuclear rate and both TWh stay as in `block`."""
+    rates, twh = block.attrs["rates"], block.attrs["twh"]
+    scale = UNIT_SCALE[block.attrs["unit"]] / 1000.0
+    rest = float(block.loc[NET_ROW[0], region]) - float(block.loc["vre_syscost", region])
+    q = twh["vre_syscost"][region]
+    gaps = np.asarray(as_list(gaps), dtype=float)
+    net = [rest + syscost_mio(q, rates["nuc_syscost"] + g) * scale for g in gaps]
+    return pd.Series(net, index=pd.Index(gaps, name="gap"), name=NET_ROW[0])
 
 
 def welfare_block_by_rate(baseline_output, shock_output, schedules, **kw):

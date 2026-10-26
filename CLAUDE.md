@@ -1,6 +1,6 @@
 # CLAUDE.md — ET_GR_wrapper
 
-Post-processing of GreenREFORM (KF26) shocks for Erhvervslivets Tænketank (ETT). Read
+Post-processing of GreenREFORM (KF26) shocks for Erhvervslivets Tænketank (ET). Read
 `README.md` first: it covers the analysis, environment, data layout and module layers.
 This file holds what the code does not say.
 
@@ -99,17 +99,3 @@ Both notebooks together take about 1.5 minutes. Run them in the background.
   `# n. label` comment.
 - End plot-only cells with `;` so figure reprs don't print.
 - Keep executed output in the notebooks.
-
-## Git
-
-- Work on a branch and commit in small, described steps. The maintainer merges and pushes;
-  don't push or merge into `main` yourself.
-- Pickles, gdx and g00 files stay out of git (`.gitignore`).
-
-## Open points
-
-- `tight_layout(rect=(0, 0.06, 1, 0.0))` in bar and balance figures is never applied
-  (top = 0). Fixing it changes every figure, so show before/after first.
-- The profit cell in `0_ET_num_analysis` takes `id2Pt` from the baseline.
-- `lcoe_inputs` reads nuclear ECap/FOM/VOM from the shock pickle. Not yet checked against
-  the shock inputs.

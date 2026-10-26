@@ -257,6 +257,12 @@ FIG_TEXT = {
     "mark_syscost_now":   "Hovedscenarie: {gap} øre/kWh, {net} mio. kr.",
     "mark_syscost_even":  "Ligevægt: {gap} øre/kWh",
 
+    # legend group headers: energy balance and net export by component
+    "legend_group_supply":  "Produktion og lagring",
+    "legend_group_demand":  "Forbrug og tab",
+    "legend_group_trade":   "Import og eksport",
+    "legend_group_transit": "Transit",
+
     # titles: energy balance
     "title_balance_el": "Figur 1: Elbalance over året for {area} i {year}",
     "title_balance_dh": "Fjernvarmebalance over året for {area} i {year}",
@@ -456,6 +462,13 @@ TEXT_COLOR    = "#2F3C41"
 PANEL_EDGE    = "#C9D2D5"
 PANEL_EDGE_LW = 0.8
 FIGSIZE_WIDE  = (12, 4)        # house width is always 12
+
+# 1x2 balance figures: gap between the panels (share of axes width), title and legend
+# offsets (inches) and the column cap of the grouped legend.
+PAIR_WSPACE     = 0.06
+TITLE_GAP_IN    = 0.20         # suptitle bottom above the panel titles
+LEGEND_GAP_IN   = 0.12         # legend box top below the lowest x-label (box adds padding)
+LEGEND_MAX_COLS = 5
 
 _AEJ_RCPARAMS = {
     "font.family":          "serif",

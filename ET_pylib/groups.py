@@ -162,6 +162,19 @@ CTYPE_COLS  = ["classic", "hsdc", "EV", "EV_V2G_charge", "HP", "CCS", "distrLoss
 COL_ORDER   = PT_COLS + CTYPE_COLS + EA_ORDER
 _FULL_ORDER = _META_BUILD + COL_ORDER
 
+# Legend groups of the electricity balance figures, as (group key, members). Electric
+# heat and PtX are plant types in the model but draw power, so they sit with demand.
+_PT_LOADS        = ("EH", "PX", "EF")
+LEGEND_GROUPS_EL = (
+    ("supply", tuple(c for c in PT_COLS if c not in _PT_LOADS)),
+    ("demand", _PT_LOADS + tuple(CTYPE_COLS)),
+    ("trade",  tuple(EA_ORDER)),
+)
+LEGEND_GROUPS_NX = (
+    ("supply",  tuple(PT_COLS)),
+    ("transit", tuple(EA_ORDER)),
+)
+
 # Storage-like series, clipped at 0 on the side where they do not belong.
 CLAMP_SUPPLY = ("ES", "HYS", "EV_V2G")           # discharge only on the supply side
 CLAMP_DEMAND = ("ES", "HYS", "EV_V2G_charge")     # charging only on the demand side

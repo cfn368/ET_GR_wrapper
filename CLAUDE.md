@@ -99,3 +99,9 @@ Both notebooks together take about 1.5 minutes. Run them in the background.
   `# n. label` comment.
 - End plot-only cells with `;` so figure reprs don't print.
 - Keep executed output in the notebooks.
+
+## Git
+
+- Single branch: work and commit directly on `main`, in small described steps.
+  Push only when asked.
+- Pickles, gdx and g00 files stay out of git (`.gitignore`).

@@ -17,13 +17,17 @@ import pandas as pd
 from .groups import (
     as_list,
     META_COLS, META_COLS_HA, COL_ORDER, PT_COLS, EA_ORDER, EA_cols, NUCLEAR_PT,
-    STATE_BASE, STATES, c_aggs_countries,
+    STATE_BASE, STATES, c_aggs_countries, LEGEND_GROUPS_EL, LEGEND_GROUPS_NX,
 )
-from .style import FIG_TEXT, STATE_LABELS, color_of, label_of, col_names, print_table
-from .plot_base import new_figure, frame_panels, bottom_legend, finish_fixed, area_panel, price_twin
+from .style import (
+    FIG_TEXT, STATE_LABELS, LEGEND_MAX_COLS, color_of, label_of, col_names, print_table,
+)
+from .plot_base import (
+    new_figure, frame_panels, bottom_legend, grouped_legend, layout_pair, save_show,
+    area_panel, price_twin,
+)
 
 TITLE_X = 0.124
-PAIR_RECT = (0, 0.06, 1, 0.0)
 
 
 # ==================== ==================== ==================== ====================
@@ -39,12 +43,15 @@ class _Market:
     meta_cols: tuple     # columns that are not plottable series
     has_trade: bool
     title_key: str
+    legend_groups: tuple | None    # (group key, members) per legend block; None = one block
 
 
 EL_MARKET = _Market("EA", "pE", "pE_baseline", FIG_TEXT["ylabel_price_el"],
-                    tuple(META_COLS), True, "title_balance_el")
+                    tuple(META_COLS), True, "title_balance_el",
+                    LEGEND_GROUPS_EL)
 DH_MARKET = _Market("HA", "pH", "pH_baseline", FIG_TEXT["ylabel_price_dh"],
-                    tuple(META_COLS_HA), False, "title_balance_dh")
+                    tuple(META_COLS_HA), False, "title_balance_dh",
+                    None)
 
 
 def _years(years, values):
@@ -98,20 +105,40 @@ def _annual_twh(frames, series):
     return totals
 
 
-def _finish_pair(fig, axes, handles, labels, *, legend_y, title, save_path, show):
-    """Shared tail of the 1x2 figures: panel frames, legend, title, layout, save, show."""
+def _legend_groups(groups, entries):
+    """(header, handles, labels) per legend group for the (series, handle) `entries`;
+    raises on a series that belongs to no group."""
+    stray = [s for s, _ in entries if not any(s in members for _, members in groups)]
+    if stray:
+        raise KeyError(f"series without a legend group: {stray}")
+    return [(FIG_TEXT[f"legend_group_{key}"],
+             [h for s, h in entries if s in members],
+             [label_of(s) for s, _ in entries if s in members])
+            for key, members in groups]
+
+
+def _finish_pair(fig, axes, entries, *, groups, legend_y, legend_max_cols, title, save_path,
+                 show):
+    """Shared tail of the 1x2 figures: panel frames, layout, title, legend, save, show.
+    `entries` are (series, handle); `groups` splits them under headers, None keeps one block
+    (which needs an explicit `legend_y`)."""
     frame_panels(axes)
-    if labels:
-        bottom_legend(fig, handles, labels, legend_y=legend_y, ncol=min(len(labels), 3))
-    finish_fixed(fig, title=title, x=TITLE_X, rect=PAIR_RECT, save_path=save_path, show=show)
+    layout_pair(fig, axes, title=title, x=TITLE_X)
+    if entries and groups is not None:
+        grouped_legend(fig, _legend_groups(groups, entries), legend_y=legend_y,
+                       max_cols=legend_max_cols)
+    elif entries:
+        bottom_legend(fig, [h for _, h in entries], [label_of(s) for s, _ in entries],
+                      legend_y=legend_y, ncol=min(len(entries), 3))
+    save_show(fig, save_path=save_path, show=show)
 
 
 # ==================== ==================== ==================== ====================
 # 1. energy balance (electricity and district heat)
 
 def _plot_balance(ctx, area, *, market, hatched, years, sort_by, legend_min_twh, figsize,
-                  save_path_fmt, show, verbose, legend_y, only=None, align_zero=False,
-                  state_labels=None):
+                  save_path_fmt, show, verbose, legend_y, legend_max_cols=LEGEND_MAX_COLS,
+                  only=None, align_zero=False, state_labels=None):
     """Baseline | shock balance for one area and market."""
     supply_dict, demand_dict = ctx.supply_dict, ctx.demand_dict
     state_labels = state_labels or STATE_LABELS
@@ -177,8 +204,8 @@ def _plot_balance(ctx, area, *, market, hatched, years, sort_by, legend_min_twh,
                         title=f"Årlig energi pr. serie — {label_of(area)}, {year}", unit="TWh")
         keep = [annual[s] >= legend_min_twh for s in series]
         _finish_pair(
-            fig, axes, [hd for hd, k in zip(handles, keep) if k],
-            [label_of(s) for s, k in zip(series, keep) if k], legend_y=legend_y,
+            fig, axes, [(s, hd) for s, hd, k in zip(series, handles, keep) if k],
+            groups=market.legend_groups, legend_y=legend_y, legend_max_cols=legend_max_cols,
             title=FIG_TEXT[market.title_key].format(area=col_names.get(area, area), year=year),
             save_path=save_path_fmt.format(area=area, year=year) if save_path_fmt else None,
             show=show,
@@ -189,14 +216,16 @@ def _plot_balance(ctx, area, *, market, hatched, years, sort_by, legend_min_twh,
 
 def plot_energy_balance_el(ctx, ea, *, years=None, sort_by="pE_baseline", legend_min_twh=0.0,
                            figsize=(12, 5), save_path_fmt=None, show=True, verbose=False,
-                           legend_y=-0.3, only=None, align_zero=False, state_labels=None):
-    """Electricity balance, baseline | shock, for area `ea`; one figure per year.
-    Returns [(fig, (ax_base, ax_shock)), ...]."""
+                           legend_y=None, legend_max_cols=LEGEND_MAX_COLS, only=None,
+                           align_zero=False,
+                           state_labels=None):
+    """Electricity balance, baseline | shock, for area `ea`; one figure per year, legend
+    grouped into supply, demand and trade. Returns [(fig, (ax_base, ax_shock)), ...]."""
     return _plot_balance(ctx, ea, market=EL_MARKET, hatched=EA_cols, years=years,
                          sort_by=sort_by, legend_min_twh=legend_min_twh, figsize=figsize,
                          save_path_fmt=save_path_fmt, show=show, verbose=verbose,
-                         legend_y=legend_y, only=only, align_zero=align_zero,
-                         state_labels=state_labels)
+                         legend_y=legend_y, legend_max_cols=legend_max_cols, only=only,
+                         align_zero=align_zero, state_labels=state_labels)
 
 
 def plot_energy_balance_dh(ctx, ha, *, years=None, sort_by="pH_baseline", legend_min_twh=0.0,
@@ -260,7 +289,8 @@ def plot_net_export(ctx, ea, *, years=None, sort_by="pE_EA_baseline", figsize=(1
                 handles = h
 
         _finish_pair(
-            fig, axes, handles, [label_of(p) for p in partners], legend_y=legend_y,
+            fig, axes, list(zip(partners, handles)), groups=None, legend_y=legend_y,
+            legend_max_cols=None,
             title=FIG_TEXT["title_net_export"].format(area=col_names.get(ea, ea), year=year),
             save_path=save_path_fmt.format(area=ea, year=year) if save_path_fmt else None,
             show=show,
@@ -377,8 +407,8 @@ def _legend_comps(annual, comps, *, min_twh=0.0, min_share=0.0, max_n=None):
 
 
 def _plot_nx_pt(ctx, out, comp, *, ea, partner, years, sort_by, legend_min_twh,
-                legend_min_share, legend_max_n, figsize, legend_y, save_path_fmt, show,
-                state_labels):
+                legend_min_share, legend_max_n, figsize, legend_y, legend_max_cols, save_path_fmt,
+                show, state_labels):
     """Engine of the two net-export-by-component figures."""
     state_labels = state_labels or STATE_LABELS
     years = _years(years, ctx.NX_dict[STATE_BASE].index.get_level_values("t"))
@@ -416,8 +446,8 @@ def _plot_nx_pt(ctx, out, comp, *, ea, partner, years, sort_by, legend_min_twh,
                 handles = h
 
         _finish_pair(
-            fig, axes, [handles[comps.index(c)] for c in legend_comps],
-            [label_of(c) for c in legend_comps], legend_y=legend_y,
+            fig, axes, [(c, handles[comps.index(c)]) for c in legend_comps],
+            groups=LEGEND_GROUPS_NX, legend_y=legend_y, legend_max_cols=legend_max_cols,
             title=FIG_TEXT["title_net_export_pt"].format(
                 area=col_names.get(ea, ea), partner=col_names.get(partner, partner), year=year),
             save_path=(save_path_fmt.format(area=ea, eaea=partner, year=year)
@@ -430,7 +460,8 @@ def _plot_nx_pt(ctx, out, comp, *, ea, partner, years, sort_by, legend_min_twh,
 
 def plot_net_export_by_pt(ctx, ea, eaea, *, share_dict, partner_map=None, years=None,
                           sort_by="pE_EA_baseline", legend_min_twh=0.0, legend_min_share=0.0,
-                          legend_max_n=None, figsize=(12, 5), legend_y=-0.3,
+                          legend_max_n=None, figsize=(12, 5), legend_y=None,
+                          legend_max_cols=LEGEND_MAX_COLS,
                           save_path_fmt=None, show=True, state_labels=None):
     """Net export EA -> EAEA split by supply component, baseline | shock."""
     if ctx.NX_dict is None:
@@ -439,15 +470,15 @@ def plot_net_export_by_pt(ctx, ea, eaea, *, share_dict, partner_map=None, years=
     return _plot_nx_pt(ctx, out, list(share_dict[STATE_BASE].columns), ea=ea, partner=eaea,
                        years=years, sort_by=sort_by, legend_min_twh=legend_min_twh,
                        legend_min_share=legend_min_share, legend_max_n=legend_max_n,
-                       figsize=figsize, legend_y=legend_y, save_path_fmt=save_path_fmt,
-                       show=show, state_labels=state_labels)
+                       figsize=figsize, legend_y=legend_y, legend_max_cols=legend_max_cols,
+                       save_path_fmt=save_path_fmt, show=show, state_labels=state_labels)
 
 
 def plot_net_export_by_pt_agg(ctx, ea, partners, *, share_dict, partner_map=None,
                               partner_label="ALL", years=None, sort_by="pE_EA_baseline",
                               legend_min_twh=0.0, legend_min_share=0.0, legend_max_n=None,
-                              figsize=(12, 5), legend_y=-0.3, save_path_fmt=None, show=True,
-                              state_labels=None):
+                              figsize=(12, 5), legend_y=None, legend_max_cols=LEGEND_MAX_COLS,
+                              save_path_fmt=None, show=True, state_labels=None):
     """Net export EA -> all `partners` split by supply component, baseline | shock."""
     if ctx.NX_dict is None:
         raise ValueError("plot_net_export_by_pt_agg needs an electricity context (NX_dict).")
@@ -457,4 +488,5 @@ def plot_net_export_by_pt_agg(ctx, ea, partners, *, share_dict, partner_map=None
                        partner=partner_label, years=years, sort_by=sort_by,
                        legend_min_twh=legend_min_twh, legend_min_share=legend_min_share,
                        legend_max_n=legend_max_n, figsize=figsize, legend_y=legend_y,
-                       save_path_fmt=save_path_fmt, show=show, state_labels=state_labels)
+                       legend_max_cols=legend_max_cols, save_path_fmt=save_path_fmt, show=show,
+                       state_labels=state_labels)

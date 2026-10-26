@@ -9,12 +9,16 @@ panels with a price twin axis, and the title / layout / save / show tail.
 
 from __future__ import annotations
 
+from itertools import product
+
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Patch
 
 from .style import (
     BG_COLOR, TEXT_COLOR, PANEL_EDGE, PANEL_EDGE_LW, FIGSIZE_WIDE, FIG_TEXT,
     MISSING_COLOR, PRICE_LINE_COLOR, HATCH_EDGE, ZERO_LINE, col_names, dk_num,
+    PAIR_WSPACE, TITLE_GAP_IN, LEGEND_GAP_IN, LEGEND_MAX_COLS,
 )
 
 
@@ -93,6 +97,82 @@ def finish_fixed(fig, *, title, x, rect, save_path, show):
 def bottom_legend(fig, handles, labels, *, legend_y, ncol):
     fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, legend_y),
                ncol=ncol, frameon=False, fontsize=11)
+
+
+def _split(n, c):
+    """`n` entries over `c` columns, longest columns first."""
+    return [n // c + (i < n % c) for i in range(c)]
+
+
+def _legend_columns(sizes, max_cols):
+    """Columns per group giving the most even column lengths within `max_cols`;
+    ties go to fewer columns."""
+    best = None
+    for alloc in product(*(range(1, min(n, max_cols) + 1) for n in sizes)):
+        if sum(alloc) > max_cols:
+            continue
+        lens = [k for n, c in zip(sizes, alloc) for k in _split(n, c)]
+        key = (max(lens) - min(lens), sum(alloc), max(lens))
+        if best is None or key < best[0]:
+            best = (key, alloc)
+    if best is None:
+        raise ValueError(f"{len(sizes)} legend groups do not fit in {max_cols} columns")
+    return best[1]
+
+
+def _figure_y(fig, bbox_y):
+    """Display y (pixels) as a figure fraction."""
+    return fig.transFigure.inverted().transform((0, bbox_y))[1]
+
+
+def grouped_legend(fig, groups, *, legend_y=None, max_cols=LEGEND_MAX_COLS):
+    """Bottom legend with a bold header over each group of `groups` [(header, handles,
+    labels), ...], groups split over columns of near-equal length. `legend_y=None`
+    puts its top LEGEND_GAP_IN below the lowest x-label."""
+    groups = [g for g in groups if g[1]]
+    cols = _legend_columns([len(hs) for _, hs, _ in groups], max_cols)
+    depth = max(k for (_, hs, _), c in zip(groups, cols) for k in _split(len(hs), c))
+    blank = lambda: Patch(facecolor="none", edgecolor="none")
+    handles, labels, headers = [], [], []
+    for (header, hs, ls), c in zip(groups, cols):
+        i = 0
+        for j, n in enumerate(_split(len(hs), c)):
+            if j == 0:
+                headers.append(len(labels))
+            pad = depth - n                         # equal columns keep the column-major fill
+            handles += [blank()] + hs[i:i + n] + [blank() for _ in range(pad)]
+            labels += [header if j == 0 else ""] + ls[i:i + n] + [""] * pad
+            i += n
+    if legend_y is None:
+        renderer = fig.canvas.get_renderer()
+        bottom = min(ax.get_tightbbox(renderer).y0 for ax in fig.axes)
+        loc, y = "upper center", _figure_y(fig, bottom) - LEGEND_GAP_IN / fig.get_figheight()
+    else:
+        loc, y = "lower center", legend_y
+    leg = fig.legend(handles, labels, loc=loc, bbox_to_anchor=(0.5, y),
+                     ncol=sum(cols), frameon=False, fontsize=11)
+    for k in headers:
+        leg.get_texts()[k].set_fontweight("bold")
+    return leg
+
+
+def layout_pair(fig, axes, *, title, x):
+    """1x2-figure layout without tight_layout: PAIR_WSPACE between the panels and the
+    title TITLE_GAP_IN above the panel titles. Call before placing the legend."""
+    fig.subplots_adjust(wspace=PAIR_WSPACE)
+    if title:
+        renderer = fig.canvas.get_renderer()
+        top = max(ax.title.get_window_extent(renderer).y1 for ax in axes)
+        fig.suptitle(title, x=x, y=_figure_y(fig, top) + TITLE_GAP_IN / fig.get_figheight(),
+                     ha="left", va="bottom", fontweight="bold")
+
+
+def save_show(fig, *, save_path, show):
+    """Save (house dpi and background) and show."""
+    if save_path:
+        fig.savefig(save_path, dpi=300, facecolor=fig.get_facecolor())
+    if show:
+        plt.show()
 
 
 # ==================== ==================== ==================== ====================

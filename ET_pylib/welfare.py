@@ -15,12 +15,13 @@ import numpy as np
 import pandas as pd
 
 from .groups import (
-    as_list, areas_of, expand_areas,
+    as_list, areas_of, expand_areas, market_of,
     c_aggs, EA_TO_COUNTRY, SCAND_ZONES, NUCLEAR_IDS, PT_RENAME, HEAT_PTS,
-    ANALYSIS_YEAR, REGION_ORDER, NUC_ID_BY_EA,
+    ANALYSIS_YEAR, REGION_ORDER, NUC_ID_BY_EA, NUC_ID_BY_HA,
 )
 from .style import (
-    STATE_SHORT, TOTAL_LABEL, dk_num, price_bin_labels, print_table, label_of, area_label,
+    STATE_SHORT, TOTAL_LABEL, MARKET_TEXT, dk_num, price_bin_labels, print_table, label_of,
+    area_label,
 )
 from ._util import id_map, filter_years, relabel_nuclear, active_line_export, equal_hour_bins
 from .costs import (
@@ -34,9 +35,10 @@ DK = c_aggs["DK"]
 # ==================== ==================== ==================== ====================
 # 0. helpers
 
-def _scope(vals, ea, areas, *, what):
-    """Keep (t, id) rows whose id sits in `areas`. Raises on any unmapped id."""
-    areas = expand_areas(areas)
+def _scope(vals, ea, areas, *, what, market="E"):
+    """Keep (t, id) rows whose id sits in `areas` (`ea` maps id -> area of `market`).
+    Raises on any unmapped id."""
+    areas = expand_areas(areas, market)
     if areas is None:
         return vals
     if ea is None:
@@ -106,10 +108,12 @@ def _profit(output, pt, *, ea=None, areas=None, heat_pts=HEAT_PTS):
     return _scope(prof, ea, areas, what="_profit")
 
 
-def _quantity(output, *, ea=None, areas=None):
-    """Annual generation per (t, id) (GWh); SEh is pre-summed over cluster hours."""
-    q = output["SEh"].vals.groupby(level=["t", "id"]).sum().rename("q")
-    return _scope(q, ea, areas, what="_quantity")
+def _quantity(output, *, ea=None, areas=None, market="E"):
+    """Annual generation per (t, id) (GWh) on `market`; SEh / SHh are pre-summed over
+    cluster hours. `ea` maps id -> area of that market."""
+    m = market_of(market)
+    q = output[m.supply_sym].vals.groupby(level=["t", "id"]).sum().rename("q")
+    return _scope(q, ea, areas, what="_quantity", market=m.key)
 
 
 def producer_profit(baseline_output, shock_output, *, id2Pt, id2EA=None,
@@ -127,13 +131,21 @@ def producer_profit(baseline_output, shock_output, *, id2Pt, id2EA=None,
 
 
 def producer_generation(baseline_output, shock_output, *, id2Pt, id2EA=None,
-                        areas=None, year=ANALYSIS_YEAR, split_nuclear=False):
-    """Electricity generation (TWh) by (t, Pt) in `areas`."""
+                        areas=None, year=ANALYSIS_YEAR, split_nuclear=False, market="E",
+                        id2HA=None):
+    """Generation (TWh) by (t, Pt) in `areas`: electricity, or district heat with
+    market="H" (areas are heat areas; id2HA defaults to the shock's, which holds the
+    nuclear ids)."""
+    m = market_of(market)
     pt = id_map(id2Pt)
-    ea = id_map(id2EA) if id2EA is not None else None
+    if m.key == "H":
+        id2area = shock_output["id2HA"].vals if id2HA is None else id2HA
+    else:
+        id2area = id2EA
+    ea = id_map(id2area) if id2area is not None else None
     return _compare(
-        _quantity(baseline_output, ea=ea, areas=areas),
-        _quantity(shock_output,    ea=ea, areas=areas),
+        _quantity(baseline_output, ea=ea, areas=areas, market=m.key),
+        _quantity(shock_output,    ea=ea, areas=areas, market=m.key),
         cols=("q_base", "q_shock"), delta="dQ_TWh",
         pt=pt, split_nuclear=split_nuclear, year=year, scale=1e-3,
     )
@@ -216,13 +228,15 @@ def print_producer_profit(by_tech, *, year, areas=DK, decomp=None):
                 title=f"Producentoverskud — {area_label(areas)}, {year}", unit="mio. kr.")
 
 
-def print_producer_qty(by_qty, *, year, areas):
-    """Generation by plant type (TWh) for one area scope."""
+def print_producer_qty(by_qty, *, year, areas, market="E"):
+    """Generation by plant type (TWh) for one area scope, on the market `by_qty` was
+    built on."""
     df = by_qty.xs(year, level="t")[["q_base", "q_shock", "dQ_TWh"]]
     df.index = [label_of(p) for p in df.index]
     print_table(df, [",.2f", ",.2f", "+,.2f"], total="all",
                 heads=[STATE_SHORT["baseline"], STATE_SHORT["shock"], "Δ"],
-                title=f"Elproduktion — {area_label(areas)}, {year}", unit="TWh")
+                title=MARKET_TEXT[market_of(market).key]["title_qty_table"].format(
+                    areas=area_label(areas), year=year), unit="TWh")
 
 
 # ==================== ==================== ==================== ====================
@@ -249,15 +263,17 @@ def _cs_core(qD0, qD1, p0, p1, area_col, *, year, areas, scale, label):
 
 
 def consumer_surplus(baseline, shock, *, year, areas=DK, markets=("E", "H"), scale=1e-3):
-    """ΔCS by market and area. markets=("E",) for areas without a district-heat
-    market. Returns (by market x area, by market, with total row, per-(h, area) detail)."""
+    """ΔCS by market and area. Zones in `areas` stand for their heat areas on the
+    heat market ("DK1" -> DK1_C, DK1_D). Returns (by market x area, by market, with
+    total row, per-(h, area) detail)."""
     areas, markets = expand_areas(areas), as_list(markets)
-    spec = {"E": ("qDemandE_DCIIA", "pE", "EA"), "H": ("qDemandH_DCIIA", "pH", "HA")}
-    parts = [
-        _cs_core(baseline[q].vals, shock[q].vals, baseline[p].vals, shock[p].vals,
-                 a, year=year, areas=areas, scale=scale, label=m)
-        for m in markets for q, p, a in [spec[m]]
-    ]
+    parts = []
+    for key in markets:
+        m = market_of(key)
+        q, p = m.demand_sym, m.price
+        parts.append(_cs_core(baseline[q].vals, shock[q].vals, baseline[p].vals, shock[p].vals,
+                              m.area_key, year=year, areas=expand_areas(areas, m.key),
+                              scale=scale, label=m.key))
     d = pd.concat(parts, ignore_index=True)
     cols = ["dCS", "price_effect", "quantity_effect"]
     by_market = d.groupby("market")[cols].sum()
@@ -266,19 +282,21 @@ def consumer_surplus(baseline, shock, *, year, areas=DK, markets=("E", "H"), sca
     return d.groupby(["market", "area"])[cols].sum(), by_market, total, d
 
 
-def print_cs_table(baseline, shock, *, year, regions=None, scale=1.0):
-    """ΔCS table (electricity) by zone, with country subtotals and a grand total.
-    `regions` is {country code: zones}; default DK, NO and SE."""
+def print_cs_table(baseline, shock, *, year, regions=None, scale=1.0, market="E"):
+    """ΔCS table by area, with country subtotals and a grand total, on `market`.
+    `regions` is {country code: areas}; default DK, NO and SE (DK on the heat side)."""
+    m = market_of(market)
     if not isinstance(regions, dict):
-        regions = {c: areas_of(c) for c in as_list(regions or ("DK", "NO", "SE"))}
+        default = ("DK", "NO", "SE") if m.key == "E" else ("DK",)
+        regions = {c: areas_of(c, m.key) for c in as_list(regions or default)}
     cols = ["dCS", "price_effect", "quantity_effect"]
     grand = pd.Series(0.0, index=cols)
     rows, rules = {}, []
     for country, areas in regions.items():
         bma, _, _, _ = consumer_surplus(baseline, shock, year=year, areas=areas,
-                                        scale=scale, markets=("E",))
+                                        scale=scale, markets=(m.key,))
         # An area without consumers (DK3) has no demand rows: it contributes zero.
-        sub = bma.xs("E", level="market")[cols].reindex(list(areas), fill_value=0.0)
+        sub = bma.xs(m.key, level="market")[cols].reindex(list(areas), fill_value=0.0)
         if rows:
             rules.append(len(rows))
         for zone in areas:
@@ -289,28 +307,30 @@ def print_cs_table(baseline, shock, *, year, regions=None, scale=1.0):
     rows[TOTAL_LABEL] = grand.tolist()
     print_table(pd.DataFrame.from_dict(rows, orient="index"), "+,.1f",
                 heads=["ΔCS", "pris", "mængde"], groups=["", "heraf", "heraf"], rules=rules,
-                title=f"Forbrugeroverskud, el — {year}", unit="mio. kr.")
+                title=MARKET_TEXT[m.key]["title_cs_table"].format(year=year), unit="mio. kr.")
 
 
 def cs_by_price_bin(baseline_output, shock_output, regions=None, *,
-                    year=ANALYSIS_YEAR, n_bins=5, cs_scale=1.0):
-    """ΔCS per region x equal-hour bin of the baseline price. Each zone is binned
-    on its own price (hWeight hours); bin k sums the zones' k-th bins."""
-    regions = list(REGION_ORDER) if regions is None else as_list(regions)
+                    year=ANALYSIS_YEAR, n_bins=5, cs_scale=1.0, market="E"):
+    """ΔCS per region x equal-hour bin of the baseline price, on `market`. Each area is
+    binned on its own price (hWeight hours); bin k sums the areas' k-th bins."""
+    m = market_of(market)
+    regions = list(m.region_order) if regions is None else as_list(regions)
     hw = baseline_output("hWeight")
-    p0 = filter_years(baseline_output("pE"), year, what="pE").droplevel("t")
+    p0 = filter_years(baseline_output(m.price), year, what=m.price).droplevel("t")
 
     rows = {}
     for region in regions:
         detail = consumer_surplus(baseline_output, shock_output, year=year,
-                                  areas=areas_of(region), markets=("E",), scale=cs_scale)[3]
+                                  areas=areas_of(region, m.key), markets=(m.key,),
+                                  scale=cs_scale)[3]
         acc = np.zeros(n_bins)
         for ea, g in detail.groupby("area"):
             dcs = g.groupby("h")["dCS"].sum()
-            price = p0.xs(ea, level="EA").reindex(dcs.index)
+            price = p0.xs(ea, level=m.area_key).reindex(dcs.index)
             w = hw.reindex(dcs.index)
             if price.isna().any() or w.isna().any():
-                raise ValueError(f"pE/hWeight missing for some states in {ea}, {year}")
+                raise ValueError(f"{m.price}/hWeight missing for some states in {ea}, {year}")
             b = equal_hour_bins(price, w, n_bins)
             acc += dcs.groupby(b).sum().reindex(range(n_bins), fill_value=0.0).to_numpy()
         rows[region] = acc
@@ -318,12 +338,13 @@ def cs_by_price_bin(baseline_output, shock_output, regions=None, *,
 
 
 def cs_by_agg_price_bin(baseline_output, shock_output, d, region, members, *,
-                        year, n_bins=5, cs_scale=1.0):
+                        year, n_bins=5, cs_scale=1.0, market="E"):
     """ΔCS per equal-hour bin of the aggregate baseline price in `d` (state prices
-    of the region). Every hour h lands in one bin for the whole region, so the
-    bars line up with the binned means of the price scatter."""
+    of the region) on `market`. Every hour h lands in one bin for the whole region,
+    so the bars line up with the binned means of the price scatter."""
     detail = consumer_surplus(baseline_output, shock_output, year=year,
-                              areas=expand_areas(members), markets=("E",), scale=cs_scale)[3]
+                              areas=expand_areas(members, market), markets=(market,),
+                              scale=cs_scale)[3]
     dcs = detail.groupby("h")["dCS"].sum()
 
     bins = equal_hour_bins(d["baseline"], d["hours"], n_bins)
@@ -410,10 +431,14 @@ def _ci_delta_by_country(baseline_output, shock_output, year):
 def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
     """Per nuclear id + total: output, extra TWh when forced to run at u_min of
     capacity in every hour, average price of the extra output, and the welfare
-    change dW (mio. kr./yr). dW < 0; the value of GR's flexibility is -dW."""
-    ids = [str(i) for i, start in NUCLEAR_IDS.items() if int(year) >= start]
+    change dW (mio. kr./yr). dW < 0; the value of GR's flexibility is -dW. The ids are
+    the NUCLEAR_IDS this db carries (CD or EX variant)."""
     m = db("id2EA").to_frame(index=False).astype(str)
     m.columns = ["id", "EA"]
+    ids = [str(i) for i, start in NUCLEAR_IDS.items()
+           if int(year) >= start and str(i) in set(m["id"])]
+    if not ids:
+        raise KeyError(f"no nuclear ids ({sorted(NUCLEAR_IDS)}) in db -- is it the nuclear shock?")
 
     def _long(sym):
         s = db(sym).rename(sym)
@@ -444,7 +469,7 @@ def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
 
 def print_flex(db, *, year, u_mins=(1.0,), syscost=NUC_SYSCOST_ORE_KWH):
     """`nuc_flex_value` per minimum load: one table per u_min, plants then total."""
-    ea_of = {i: ea for ea, i in NUC_ID_BY_EA.items()}
+    ea_of = {i: a for a, i in (*NUC_ID_BY_EA.items(), *NUC_ID_BY_HA.items())}
     for u in as_list(u_mins):
         f = nuc_flex_value(db, year=year, u_min=u, syscost=syscost)
         f.index = [TOTAL_LABEL if i == "total" else f"{label_of('Nuclear')} {ea_of.get(i, i)}"

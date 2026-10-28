@@ -2,12 +2,15 @@
 Sets and conventions — the model vocabulary of the KF26 wrapper
 ================================================================
 
-Areas, country aggregates, plant- and consumption-type renames, nuclear ids and
-the column conventions of the balance frames. Data only: everything rendered
-(labels, colours, figure text) lives in `style`.
+Areas and heat areas, country aggregates, plant- and consumption-type renames,
+nuclear ids, the column conventions of the balance frames and the two markets
+("E" electricity, "H" district heat). Data only: everything rendered (labels,
+colours, figure text) lives in `style`.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 
 # ==================== ==================== ==================== ====================
@@ -42,6 +45,18 @@ c_aggs_countries = {k: v for k, v in c_aggs.items() if k != "Scandi"}
 EA_TO_COUNTRY    = {ea: c for c, eas in c_aggs_countries.items() for ea in eas}
 SCAND_ZONES      = c_aggs["Scandi"]
 
+# District-heat areas (HA market): central (_C) and decentral (_D) per Danish zone.
+# A heat region is Denmark or one zone; DK3 has no heat area.
+HA_ORDER = ["DK1_C", "DK1_D", "DK2_C", "DK2_D"]
+HA_cols  = set(HA_ORDER)
+HA_AGGS  = {
+    "DK":  ("DK1_C", "DK1_D", "DK2_C", "DK2_D"),
+    "DK1": ("DK1_C", "DK1_D"),
+    "DK2": ("DK2_C", "DK2_D"),
+}
+_REGION_AGGS = {"E": c_aggs, "H": HA_AGGS}
+
+
 def as_list(x):
     """A single value (str, number) as [x], an iterable as a list, None as None, so
     every multi-value argument also takes one value."""
@@ -52,17 +67,21 @@ def as_list(x):
     return list(x)
 
 
-def areas_of(region):
-    """Zones behind a region: an aggregate ("DK", "Scandi") gives its members, any
-    other name (a zone such as "DK1") is taken as a region of one."""
-    return tuple(c_aggs[region]) if region in c_aggs else (region,)
+def areas_of(region, market="E"):
+    """Areas behind a region in `market` ("E" zones, "H" heat areas): an aggregate
+    ("DK", "Scandi"; "DK1" on the heat side) gives its members, any other name is
+    taken as a region of one."""
+    if market not in _REGION_AGGS:
+        raise KeyError(f"unknown market {market!r}; choose one of {sorted(_REGION_AGGS)}")
+    aggs = _REGION_AGGS[market]
+    return tuple(aggs[region]) if region in aggs else (region,)
 
 
-def expand_areas(areas):
-    """Zones behind one or more areas, aggregates expanded; None stays None."""
+def expand_areas(areas, market="E"):
+    """Areas behind one or more areas, aggregates expanded; None stays None."""
     if areas is None:
         return None
-    return tuple(ea for a in as_list(areas) for ea in areas_of(a))
+    return tuple(a2 for a in as_list(areas) for a2 in areas_of(a, market))
 
 
 # Trade partners: country aggregates plus every other area on its own.
@@ -102,10 +121,14 @@ def _members(m):
 # NUC_ID_BY_EA is read by ET_shocks.nucShock; NUCLEAR_IDS maps id -> first nuclear year.
 NUCLEAR_PT        = "Nuclear"
 NUC_ID_BY_EA      = {"DK1": "idNUC_DK1", "DK2": "idNUC_DK2"}
+# CHP variant (EX): one unit per Danish heat area, each zone's GWe split over its areas.
+NUC_HA_BY_EA      = {"DK1": ("DK1_C", "DK1_D"), "DK2": ("DK2_C", "DK2_D")}
+NUC_ID_BY_HA      = {ha: f"idNUC_{ha}" for has in NUC_HA_BY_EA.values() for ha in has}
 NUC_START_YEAR    = 2035
+_NUC_ALL_IDS      = (*NUC_ID_BY_EA.values(), *NUC_ID_BY_HA.values())   # CD and EX variants
 NUCLEAR_IDS_BY_GEO = {
-    "disaggEA": {i: NUC_START_YEAR for i in NUC_ID_BY_EA.values()},
-    "aggEA":    {i: NUC_START_YEAR for i in NUC_ID_BY_EA.values()},
+    "disaggEA": {i: NUC_START_YEAR for i in _NUC_ALL_IDS},
+    "aggEA":    {i: NUC_START_YEAR for i in _NUC_ALL_IDS},
 }
 NUCLEAR_IDS = dict(NUCLEAR_IDS_BY_GEO["disaggEA"])
 
@@ -144,7 +167,23 @@ WELFARE_SERIES_FULL = ("dCS", "dPS", "dCI", "annuity", "net")
 NX_COMP_AGGS  = {**PT_AGGS, **PARTNER_MAP}
 NX_COMP_ORDER = PT_AGG_ORDER + PARTNER_ORDER
 
+# District-heat production buckets (SHh); every heat-producing type is kept.
+PT_AGGS_DH = _members({
+    "Kernekraft":     (NUCLEAR_PT,),
+    "Kraftvarme":     ("BP", "BB", "EX"),
+    "Elvarme":        ("EH",),
+    "Kedler":         ("BH",),
+    "Solvarme":       ("SH",),
+    "Varmelager":     ("HS",),
+    "Eksogen varme":  ("EPH",),
+    "Overskudsvarme": ("PX",),
+})
+PT_AGG_ORDER_DH  = ["Kernekraft", "Kraftvarme", "Elvarme", "Kedler", "Solvarme",
+                    "Varmelager", "Eksogen varme", "Overskudsvarme"]
+REGION_ORDER_DH  = ["DK1", "DK2", "DK"]
+
 assert set(PT_AGGS) == set(PT_AGG_ORDER), "PT_AGGS / PT_AGG_ORDER out of sync"
+assert set(PT_AGGS_DH) == set(PT_AGG_ORDER_DH), "PT_AGGS_DH / PT_AGG_ORDER_DH out of sync"
 assert set(PARTNER_MAP) == set(PARTNER_ORDER), "PARTNER_MAP / PARTNER_ORDER out of sync"
 
 
@@ -188,3 +227,42 @@ COL_ORDER_HA    = ["HS", "SH", "EH", "BH", "EPH", "BP", "BB", "EX", NUCLEAR_PT, 
 _FULL_ORDER_HA  = _META_BUILD_HA + COL_ORDER_HA
 CLAMP_SUPPLY_HA = ("HS", "SH")
 CLAMP_DEMAND_HA = ("HS",)
+
+
+# ==================== ==================== ==================== ====================
+# 6. markets: what separates electricity ("E") from district heat ("H")
+
+@dataclass(frozen=True)
+class Market:
+    """Symbols, areas and buckets of one market. Rendered text lives in `style`."""
+    key: str             # "E" / "H"
+    area_key: str        # "EA" / "HA"
+    price: str           # "pE" / "pH"
+    supply_sym: str      # "SEh" / "SHh", pre-summed over cluster hours
+    demand_sym: str      # final (DC-IIA) demand, (t, h, area)
+    id2area: str         # "id2EA" / "id2HA"
+    weight_cols: tuple   # DC-IIA columns of the demand frame: regional price weights
+    no_demand: tuple     # areas without final demand
+    area_cols: frozenset # single areas of the market
+    region_order: tuple  # default regions of the figures
+    pt_aggs: dict
+    pt_drop: tuple
+    pt_agg_order: tuple
+
+
+MARKETS = {
+    "E": Market("E", "EA", "pE", "SEh", "qDemandE_DCIIA", "id2EA", DCIIA_TYPES,
+                AREAS_WITHOUT_DCIIA, frozenset(EA_cols), tuple(REGION_ORDER),
+                PT_AGGS, PT_DROP, tuple(PT_AGG_ORDER)),
+    "H": Market("H", "HA", "pH", "SHh", "qDemandH_DCIIA", "id2HA", DH_DCIIA_TYPES,
+                (), frozenset(HA_cols), tuple(REGION_ORDER_DH),
+                PT_AGGS_DH, (), tuple(PT_AGG_ORDER_DH)),
+}
+
+
+def market_of(market):
+    """The `Market` behind "E" / "H"; raises on anything else."""
+    if market not in MARKETS:
+        raise KeyError(f"unknown market {market!r}; choose one of {sorted(MARKETS)}")
+    return MARKETS[market]
+

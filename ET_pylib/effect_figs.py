@@ -3,8 +3,10 @@ Effect figures — prices, trade, production, profit and welfare by region
 =========================================================================
 
 Bar figures of baseline vs. shock and of shock - baseline per region. The data
-helpers at the top return frames; the figures below draw them. Text and colours
-come from `style`, drawing pieces from `plot_base`.
+helpers at the top return frames; the figures below draw them. Prices and capture
+prices follow the context's market, production and ΔCS by bin take `market=`;
+trade is electricity only. Text and colours come from `style`, drawing pieces from
+`plot_base`.
 """
 
 from __future__ import annotations
@@ -14,16 +16,16 @@ import pandas as pd
 from matplotlib.ticker import FuncFormatter
 
 from .groups import (
-    STATES, REGION_ORDER, PARTNER_ORDER, PT_AGGS, PT_DROP, PT_AGG_ORDER,
-    NX_COMP_AGGS, NX_COMP_ORDER, WELFARE_SERIES, ANALYSIS_YEAR, as_list, areas_of,
+    STATES, REGION_ORDER, PARTNER_ORDER,
+    NX_COMP_AGGS, NX_COMP_ORDER, WELFARE_SERIES, ANALYSIS_YEAR, as_list, areas_of, market_of,
 )
 from .style import (
-    FIG_TEXT, FIGSIZE_WIDE, STATE_COLORS, STATE_LABELS, DELTA_COLORS, PT_AGG_COLORS,
+    FIG_TEXT, MARKET_TEXT, FIGSIZE_WIDE, STATE_COLORS, STATE_LABELS, DELTA_COLORS, PT_AGG_COLORS,
     NX_COMP_COLORS, WELFARE_COLORS, WELFARE_COMP_LABELS, PRICE_STAT_LABELS,
     TRADE_COMP_LABELS, MISSING_COLOR, TOTAL_LABEL, TEXT_COLOR, area_colors, area_label,
     col_names, dk_num, label_of, print_table,
 )
-from .market import price_summary, full_trade_summary, capture_summary
+from .market import price_summary, full_trade_summary, capture_summary, require_el
 from .welfare import (
     producer_profit, producer_generation, welfare_levels, cs_by_price_bin, welfare_by_syscost_gap,
 )
@@ -37,14 +39,16 @@ from .plot_base import (
 # 1. data: levels and deltas by region
 
 def price_levels(ctx, regions=None, *, years=ANALYSIS_YEAR):
-    """`price_summary` stacked over regions, indexed by (region, run)."""
-    regions = list(REGION_ORDER) if regions is None else as_list(regions)
+    """`price_summary` stacked over regions, indexed by (region, run); the context's
+    market sets the price and the default regions."""
+    regions = list(market_of(ctx.market).region_order) if regions is None else as_list(regions)
     return pd.concat([price_summary(ctx, country=r, years=years) for r in regions])
 
 
 def trade_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net"):
     """All-partner trade totals per region, indexed by (region, run), columns TWh /
     bnDKK. `component`: "net", "export" or "import"."""
+    require_el(ctx, "trade_levels")
     regions = list(REGION_ORDER) if regions is None else as_list(regions)
     rows = []
     for region in regions:
@@ -61,6 +65,7 @@ def trade_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net"):
 def trade_delta_by_partner(ctx, regions=None, *, years=ANALYSIS_YEAR,
                            component="net", value=False):
     """Shock - baseline trade per region x partner; TWh, or mia. kr. if `value`."""
+    require_el(ctx, "trade_delta_by_partner")
     regions = list(REGION_ORDER) if regions is None else as_list(regions)
     col = f"{component}_{'mDKK' if value else 'TWh'}"
     scale = 1e-3 if value else 1.0
@@ -77,6 +82,7 @@ def trade_delta_by_partner(ctx, regions=None, *, years=ANALYSIS_YEAR,
 def nx_delta_by_pt(ctx, share_dict, regions=None, *, years=ANALYSIS_YEAR):
     """Shock - baseline net export per region x supply component (TWh). Exports
     carry the origin zone's supply mix, imports the partner zone's."""
+    require_el(ctx, "nx_delta_by_pt")
     regions = list(REGION_ORDER) if regions is None else as_list(regions)
     yrs = [years] if isinstance(years, int) else list(years)
     comp = list(share_dict["baseline"].columns)
@@ -104,16 +110,17 @@ def nx_delta_by_pt(ctx, share_dict, regions=None, *, years=ANALYSIS_YEAR):
 
 
 def capture_delta_by_pt(ctx, *, country="DK", years=ANALYSIS_YEAR, min_gen=100.0):
-    """Δ capture price (DKK/MWh) per aggregated plant type, generation-weighted;
-    buckets below `min_gen` GWh of baseline generation are dropped."""
+    """Δ capture price (DKK/MWh) per aggregated plant type on the context's market,
+    generation-weighted; buckets below `min_gen` GWh of baseline generation are dropped."""
+    m = market_of(ctx.market)
     cap = capture_summary(ctx, country=country, years=years).reset_index()
 
     cols, gen_base = {}, None
     for state, suf in (("baseline", "basel"), ("shock", "shock")):
         gen = cap.set_index("Pt")[f"gen_{suf}"].fillna(0.0)
         capt = cap.set_index("Pt")[f"capture_{suf}"].fillna(0.0)
-        num = _pt_agg(gen * capt, what=f"capture/{country}/{state}")
-        den = _pt_agg(gen, what=f"capture/{country}/{state}")
+        num = _pt_agg(gen * capt, m=m, what=f"capture/{country}/{state}")
+        den = _pt_agg(gen, m=m, what=f"capture/{country}/{state}")
         cols[state] = num / den.where(den > 0)
         if state == "baseline":
             gen_base = den
@@ -122,33 +129,38 @@ def capture_delta_by_pt(ctx, *, country="DK", years=ANALYSIS_YEAR, min_gen=100.0
     return d[gen_base.reindex(d.index) >= min_gen]
 
 
-def _stack_frame(fn, baseline_output, shock_output, *, id2Pt, id2EA, regions, year,
-                 base_col, shock_col, scale):
-    """{state: frame region x PT_AGG_ORDER}, nuclear split out of CD."""
-    regions = list(REGION_ORDER) if regions is None else as_list(regions)
+def _stack_frame(fn, baseline_output, shock_output, *, regions, year, base_col, shock_col,
+                 scale, m, **fn_kw):
+    """{state: frame region x the market's bucket order}, nuclear split out."""
+    regions = list(m.region_order) if regions is None else as_list(regions)
     out = {s: {} for s in STATES}
     for region in regions:
-        df = fn(baseline_output, shock_output, id2Pt=id2Pt, id2EA=id2EA,
-                areas=areas_of(region), year=year, split_nuclear=True).droplevel("t")
-        out["baseline"][region] = _pt_agg(df[base_col], what=f"{fn.__name__}/{region}") * scale
-        out["shock"][region] = _pt_agg(df[shock_col], what=f"{fn.__name__}/{region}") * scale
-    return {k: pd.DataFrame(v).T.loc[regions, PT_AGG_ORDER] for k, v in out.items()}
+        df = fn(baseline_output, shock_output, areas=areas_of(region, m.key), year=year,
+                split_nuclear=True, **fn_kw).droplevel("t")
+        what = f"{fn.__name__}/{region}"
+        out["baseline"][region] = _pt_agg(df[base_col], m=m, what=what) * scale
+        out["shock"][region] = _pt_agg(df[shock_col], m=m, what=what) * scale
+    return {k: pd.DataFrame(v).T.loc[regions, list(m.pt_agg_order)] for k, v in out.items()}
 
 
 def generation_by_pt(baseline_output, shock_output, *, id2Pt, id2EA=None,
-                     regions=None, year=ANALYSIS_YEAR):
-    """Generation (TWh) per region x aggregated plant type, both states."""
+                     regions=None, year=ANALYSIS_YEAR, market="E", id2HA=None):
+    """Generation (TWh) per region x aggregated plant type, both states; electricity,
+    or district heat with market="H" (regions DK1, DK2, DK over the heat areas)."""
+    m = market_of(market)
     return _stack_frame(producer_generation, baseline_output, shock_output,
-                        id2Pt=id2Pt, id2EA=id2EA, regions=regions, year=year,
-                        base_col="q_base", shock_col="q_shock", scale=1.0)
+                        regions=regions, year=year, base_col="q_base", shock_col="q_shock",
+                        scale=1.0, m=m, id2Pt=id2Pt, id2EA=id2EA, market=m.key, id2HA=id2HA)
 
 
 def profit_by_pt(baseline_output, shock_output, *, id2Pt, id2EA=None,
                  regions=None, year=ANALYSIS_YEAR):
-    """Producer profit (mia. kr.) per region x aggregated plant type, both states."""
+    """Producer profit (mia. kr.) per region x aggregated plant type, both states.
+    Electricity only: CHP heat revenue sits inside UP and cannot be split out."""
     return _stack_frame(producer_profit, baseline_output, shock_output,
-                        id2Pt=id2Pt, id2EA=id2EA, regions=regions, year=year,
-                        base_col="profit_base", shock_col="profit_shock", scale=1e-3)
+                        regions=regions, year=year, base_col="profit_base",
+                        shock_col="profit_shock", scale=1e-3, m=market_of("E"),
+                        id2Pt=id2Pt, id2EA=id2EA)
 
 
 # ==================== ==================== ==================== ====================
@@ -161,16 +173,17 @@ def _pivot(df, stat):
     return labels, vals
 
 
-def _pt_agg(s, *, aggs=PT_AGGS, drop=PT_DROP, what=""):
-    """Collapse a Pt-indexed Series onto PT_AGGS, heat-only types dropped.
-    Unmapped types with non-zero values fail loudly."""
-    inv = {pt: label for label, pts in aggs.items() for pt in pts}
-    s = s[~s.index.isin(drop)]
+def _pt_agg(s, *, m=None, what=""):
+    """Collapse a Pt-indexed Series onto the buckets of market `m` (electricity by
+    default: heat-only types dropped). Unmapped types with non-zero values fail loudly."""
+    m = market_of("E") if m is None else m
+    inv = {pt: label for label, pts in m.pt_aggs.items() for pt in pts}
+    s = s[~s.index.isin(m.pt_drop)]
     missing = sorted({p for p in s.index if p not in inv and abs(s[p]) > 1e-9})
     if missing:
         raise KeyError(f"{what}: unmapped plant types with non-zero values: {missing}")
     out = s.groupby(s.index.map(lambda p: inv.get(p, "UNMAPPED"))).sum()
-    return out.reindex(PT_AGG_ORDER, fill_value=0.0)
+    return out.reindex(list(m.pt_agg_order), fill_value=0.0)
 
 
 def _collapse_comps(df, *, aggs=NX_COMP_AGGS, order=NX_COMP_ORDER):
@@ -265,11 +278,11 @@ def _plot_stacked_delta(df, *, title, ylabel, decimals, figsize, bar_width, lege
 def plot_price_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE,
                       bar_width=0.38, legend_y=-0.06, decimals=1, save_path=None,
                       show=True, verbose=False):
-    """Demand-weighted mean price by region, baseline vs. shock."""
+    """Demand-weighted mean price by region, baseline vs. shock, on the context's market."""
     df = price_levels(ctx, regions, years=years) / 10.0   # DKK/MWh -> øre/kWh
     return _plot_levels(
         df, "mean",
-        title=FIG_TEXT["title_price_levels"].format(year=year_label(years)),
+        title=MARKET_TEXT[ctx.market]["title_price_levels"].format(year=year_label(years)),
         ylabel=FIG_TEXT["unit_price_ore"], decimals=decimals,
         figsize=figsize, bar_width=bar_width, legend_y=legend_y,
         save_path=save_path, show=show, verbose=verbose,
@@ -369,13 +382,16 @@ def plot_welfare_by_syscost_gap(block, *, region="DK", gaps=np.arange(0.0, 25.01
 
 
 def plot_generation_stack(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,
-                          year=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE, bar_width=0.38,
-                          legend_y=-0.06, decimals=1, save_path=None, show=True):
-    """Electricity generation (TWh) by plant type, baseline | shock."""
+                          year=ANALYSIS_YEAR, market="E", id2HA=None, figsize=FIGSIZE_WIDE,
+                          bar_width=0.38, legend_y=-0.06, decimals=1, save_path=None,
+                          show=True):
+    """Generation (TWh) by plant type, baseline | shock; electricity, or district heat
+    with market="H"."""
+    m = market_of(market)
     return _plot_stacked_states(
         generation_by_pt(baseline_output, shock_output, id2Pt=id2Pt, id2EA=id2EA,
-                         regions=regions, year=year),
-        title=FIG_TEXT["title_gen_stack"].format(year=year_label(year)),
+                         regions=regions, year=year, market=m.key, id2HA=id2HA),
+        title=MARKET_TEXT[m.key]["title_gen_stack"].format(year=year_label(year)),
         ylabel=FIG_TEXT["unit_energy_yr"], decimals=decimals, figsize=figsize,
         bar_width=bar_width, legend_y=legend_y, save_path=save_path, show=show,
     )
@@ -400,7 +416,8 @@ def plot_profit_stack(baseline_output, shock_output, *, id2Pt, id2EA=None, regio
 def plot_price_delta(ctx, regions=None, *, years=ANALYSIS_YEAR, stats=("mean",),
                      relative=False, figsize=(12, 5), bar_width=0.55, decimals=1,
                      save_path=None, show=True, verbose=False):
-    """Shock - baseline price by region, one panel per `price_summary` statistic."""
+    """Shock - baseline price by region, one panel per `price_summary` statistic, on
+    the context's market."""
     df = price_levels(ctx, regions, years=years) / 10.0   # DKK/MWh -> øre/kWh
     stats = as_list(stats)
 
@@ -417,7 +434,7 @@ def plot_price_delta(ctx, regions=None, *, years=ANALYSIS_YEAR, stats=("mean",),
         ax.set_title(PRICE_STAT_LABELS.get(stat, stat), loc="left", pad=2)
         deltas[PRICE_STAT_LABELS.get(stat, stat)] = pd.Series(d, index=[label_of(r) for r in labels])
 
-    title = FIG_TEXT["title_price_delta"].format(
+    title = MARKET_TEXT[ctx.market]["title_price_delta"].format(
         year=year_label(years), unit=FIG_TEXT["delta_rel" if relative else "delta_abs"],
         note=FIG_TEXT["delta_note"])
     if verbose:
@@ -429,7 +446,7 @@ def plot_price_delta(ctx, regions=None, *, years=ANALYSIS_YEAR, stats=("mean",),
 
 def plot_capture_delta_by_pt(ctx, *, country="DK", years=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE,
                              bar_width=0.55, decimals=1, save_path=None, show=True):
-    """Δ capture price by aggregated plant type for one region."""
+    """Δ capture price by aggregated plant type for one region, on the context's market."""
     d = capture_delta_by_pt(ctx, country=country, years=years) / 10.0
     labels = list(d.index)
     fig, ax = new_figure(figsize=figsize)
@@ -437,7 +454,7 @@ def plot_capture_delta_by_pt(ctx, *, country="DK", years=ANALYSIS_YEAR, figsize=
                 [PT_AGG_COLORS.get(l, MISSING_COLOR) for l in labels],
                 bar_width=bar_width, decimals=decimals, ylabel=FIG_TEXT["unit_price_ore"])
     finish(fig, save_path=save_path, show=show,
-           title=FIG_TEXT["title_capture_delta"].format(
+           title=MARKET_TEXT[ctx.market]["title_capture_delta"].format(
                region=col_names.get(country, country), year=year_label(years)))
     return fig, ax
 
@@ -470,14 +487,17 @@ def plot_nx_delta_by_pt(ctx, share_dict, regions=None, *, years=ANALYSIS_YEAR,
 
 
 def plot_generation_delta(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,
-                          year=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE, bar_width=0.45,
-                          legend_y=-0.10, decimals=1, save_path=None, show=True):
-    """Δ electricity generation (TWh) decomposed by plant type."""
+                          year=ANALYSIS_YEAR, market="E", id2HA=None, figsize=FIGSIZE_WIDE,
+                          bar_width=0.45, legend_y=-0.10, decimals=1, save_path=None,
+                          show=True):
+    """Δ generation (TWh) decomposed by plant type; electricity, or district heat with
+    market="H"."""
+    m = market_of(market)
     f = generation_by_pt(baseline_output, shock_output, id2Pt=id2Pt, id2EA=id2EA,
-                         regions=regions, year=year)
+                         regions=regions, year=year, market=m.key, id2HA=id2HA)
     return _plot_stacked_delta(
         f["shock"] - f["baseline"],
-        title=FIG_TEXT["title_gen_delta"].format(year=year_label(year)),
+        title=MARKET_TEXT[m.key]["title_gen_delta"].format(year=year_label(year)),
         ylabel=FIG_TEXT["unit_energy_yr"], decimals=decimals,
         colors=PT_AGG_COLORS, figsize=figsize, bar_width=bar_width,
         legend_y=legend_y, save_path=save_path, show=show,
@@ -502,14 +522,15 @@ def plot_profit_delta(baseline_output, shock_output, *, id2Pt, id2EA=None, regio
 
 
 def plot_cs_by_price_bin(baseline_output, shock_output, regions=None, *, year=ANALYSIS_YEAR,
-                         n_bins=5, cs_scale=1.0, figsize=FIGSIZE_WIDE, bar_width=None,
-                         legend_y=-0.12, decimals=0, save_path=None, show=True,
-                         verbose=False):
+                         market="E", n_bins=5, cs_scale=1.0, figsize=FIGSIZE_WIDE,
+                         bar_width=None, legend_y=-0.12, decimals=0, save_path=None,
+                         show=True, verbose=False):
     """ΔCS by equal-hour bins of the baseline price (cheapest -> dearest), one series
-    per region. Bins sum to the ΔCS of `plot_welfare_levels` (markets=("E",))."""
+    per region, on `market`. Bins sum to the ΔCS of `plot_welfare_levels` for that market."""
+    m = market_of(market)
     df = cs_by_price_bin(baseline_output, shock_output, regions, year=year,
-                         n_bins=n_bins, cs_scale=cs_scale)
-    title = FIG_TEXT["title_cs_price_bin"].format(year=year_label(year))
+                         n_bins=n_bins, cs_scale=cs_scale, market=m.key)
+    title = MARKET_TEXT[m.key]["title_cs_price_bin"].format(year=year_label(year))
     if verbose:
         out = df.assign(**{TOTAL_LABEL: df.sum(axis=1)})
         out.index = [label_of(r) for r in df.index]

@@ -2,14 +2,15 @@
 import numpy as np
 import pandas as pd
 
-from ET_pylib.groups import NUC_ID_BY_EA as NUC_IDS
+from ET_pylib.groups import NUC_ID_BY_EA as NUC_IDS, NUC_HA_BY_EA, NUC_ID_BY_HA
 from ET_pylib.costs import nuc_wind_swap  # noqa: F401  re-exported for 2_Analysis
 
 
 def nuc_plants(gw, start_year, *, Eff, VOM, UranTax, FOM, sigmaID,
-               ft="Ft21", bft="URA", end_year=None):
-    """New condensing nuclear plants, one per area in `gw` ({EA: GWe}).
-    VOM in DKK/MWh el, UranTax in DKK/MWh uranium input, FOM in mio. DKK/GW/year."""
+               ft="Ft21", bft="URA", end_year=None, chp=None):
+    """New nuclear plants per area in `gw` ({EA: GWe}): condensing, or EX units per heat area
+    with `chp` (see `chp_split`). Eff, VOM in DKK/MWh el and FOM in mio. DKK/GW/year refer
+    to condensing operation; UranTax in DKK/MWh uranium input."""
     from pyGRE.makeModels.kf26_added_plants import AddedPlant
     unknown = set(gw) - set(NUC_IDS)
     if unknown:
@@ -28,12 +29,77 @@ def nuc_plants(gw, start_year, *, Eff, VOM, UranTax, FOM, sigmaID,
         fuelPriceAdjustment=0,
     )
     extra = {} if end_year is None else {"end_year": end_year}
-    plants = [AddedPlant(id=NUC_IDS[ea], ea=ea, pt="CD", ecap=v, start_year=start_year,
-                         ft=ft, bft=bft, inputs=dict(inputs), **extra)
-              for ea, v in gw.items() if v > 0]
+    if chp is None:
+        plants = [AddedPlant(id=NUC_IDS[ea], ea=ea, pt="CD", ecap=v, start_year=start_year,
+                             ft=ft, bft=bft, inputs=dict(inputs), **extra)
+                  for ea, v in gw.items() if v > 0]
+    else:
+        plants = [AddedPlant(id=NUC_ID_BY_HA[ha], ea=ea, ha=ha, pt="EX", ecap=u["ECap"],
+                             cm=u["Cm"], cv=u["Cv"], start_year=start_year, ft=ft, bft=bft,
+                             inputs={**inputs, **ex_inputs(u, Eff=Eff, VOM=VOM, UranTax=UranTax,
+                                                           FOM=FOM, **chp)}, **extra)
+                  for ea, v in gw.items() if v > 0
+                  for ha, u in chp_split(v, chp["shares"][ea], x=chp["x"], f=chp["f"],
+                                         loss=chp["loss"]).items()]
     if not plants:
         raise ValueError("No nuclear capacity given.")
     return plants
+
+
+def heat_shares(db_base, year):
+    """Share of each zone's district-heat demand (DHt_HA) per heat area in `year`:
+    {EA: {HA: share}} over NUC_HA_BY_EA."""
+    from pyGRE.makeModels.kf26_all_years import values_of
+    dh = values_of(db_base, "DHt_HA").rename("DHt").reset_index()
+    dh = dh[dh["t"].astype(int) == int(year)].set_index(dh["HA"].astype(str))["DHt"].astype(float)
+    out = {}
+    for ea, has in NUC_HA_BY_EA.items():
+        v = dh.reindex(has)
+        if v.isna().any() or v.sum() <= 0:
+            raise ValueError(f"DHt_HA missing or zero for {list(has)} in {year}:\n{v.to_string()}")
+        out[ea] = (v / v.sum()).to_dict()
+    return out
+
+
+def chp_split(gw, shares, *, x, f, loss):
+    """EX units behind `gw` GWe nameplate, split by heat-area `shares`. A share x of the
+    electricity goes to heat at f MWh heat per MWh el, less `loss` in transmission:
+    HCap = f(1 - loss) x GW, ECap = (1 - x) GW, Cv = 1/(f(1 - loss)), Cm = ECap/HCap."""
+    if not 0 < x < 1:
+        raise ValueError(f"x must lie in (0, 1), got {x}")
+    if f <= 0 or not 0 <= loss < 1:
+        raise ValueError(f"Need f > 0 and 0 <= loss < 1, got f={f}, loss={loss}")
+    if abs(sum(shares.values()) - 1) > 1e-9:
+        raise ValueError(f"Heat-area shares must sum to 1, got {shares}")
+    f_net = f * (1 - loss)
+    return {ha: dict(GW=gw * s, ECap=(1 - x) * gw * s, HCap=f_net * x * gw * s,
+                     Cm=(1 - x) / (f_net * x), Cv=1 / f_net, x=x)
+            for ha, s in shares.items()}
+
+
+def ex_inputs(unit, *, Eff, VOM, UranTax, FOM, sigmaID_EH, **_):
+    """GR inputs of one EX unit (Cm and Cv go on the plant itself). Eff, VOM and FOM sit at
+    the back-pressure point (per MWh el, per GW ECap), so they are scaled by 1/(1 - x);
+    fuel use and FOM totals are unchanged."""
+    k = 1 - unit["x"]
+    return dict(Eff=Eff * k, VOM=(VOM + UranTax / Eff) / k, FOM=FOM / k,
+                sigmaID_EH=sigmaID_EH)
+
+
+def check_chp(db, plants):
+    """Raise if an EX plant did not land in the model with its heat area, Cm, Cv and HCap."""
+    from pyGRE.makeModels.kf26_all_years import values_of
+    ids = [p.id for p in plants if p.pt == "EX"]
+    if not ids:
+        return
+    ha = values_of(db, "id2HA").to_frame(index=False).astype(str)
+    missing = {"id2HA": sorted(set(ids) - set(ha["id"]))}
+    for sym in ("Cm", "Cv", "HCap"):
+        have = set(values_of(db, sym).reset_index()["id"].astype(str))
+        missing[sym] = sorted(set(ids) - have)
+    missing = {k: v for k, v in missing.items() if v}
+    if missing:
+        raise RuntimeError(f"EX nuclear plants incomplete in the model database: {missing}")
 
 
 def check_cuts(db_base, cuts):
@@ -67,6 +133,7 @@ def solve_nuc_shock(run, db_base, plants, cuts, years, steps=(0.25, 0.5, 0.75, 1
         raise ValueError("The last step must be 1.0.")
     check_cuts(db_base, cuts)
     add_plants(run.db, plants, years)
+    check_chp(run.db, plants)
     run.absorb_new_keys = True
 
     control = run.solve_shock("", label="control, new plants at zero capacity")

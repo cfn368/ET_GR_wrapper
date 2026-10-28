@@ -36,6 +36,7 @@ TITLE_X = 0.124
 @dataclass(frozen=True)
 class _Market:
     """What separates the electricity balance from the district-heat balance."""
+    key: str             # "E" / "H", must match ctx.market
     area_key: str        # "EA" / "HA"
     price: str           # "pE" / "pH"
     price_base: str      # "pE_baseline" / "pH_baseline"
@@ -46,10 +47,10 @@ class _Market:
     legend_groups: tuple | None    # (group key, members) per legend block; None = one block
 
 
-EL_MARKET = _Market("EA", "pE", "pE_baseline", FIG_TEXT["ylabel_price_el"],
+EL_MARKET = _Market("E", "EA", "pE", "pE_baseline", FIG_TEXT["ylabel_price_el"],
                     tuple(META_COLS), True, "title_balance_el",
                     LEGEND_GROUPS_EL)
-DH_MARKET = _Market("HA", "pH", "pH_baseline", FIG_TEXT["ylabel_price_dh"],
+DH_MARKET = _Market("H", "HA", "pH", "pH_baseline", FIG_TEXT["ylabel_price_dh"],
                     tuple(META_COLS_HA), False, "title_balance_dh",
                     None)
 
@@ -140,6 +141,9 @@ def _plot_balance(ctx, area, *, market, hatched, years, sort_by, legend_min_twh,
                   save_path_fmt, show, verbose, legend_y, legend_max_cols=LEGEND_MAX_COLS,
                   only=None, align_zero=False, state_labels=None):
     """Baseline | shock balance for one area and market."""
+    if ctx.market != market.key:
+        raise ValueError(f"a market={market.key!r} figure got a market={ctx.market!r} context; "
+                         "build it with the matching market=")
     supply_dict, demand_dict = ctx.supply_dict, ctx.demand_dict
     state_labels = state_labels or STATE_LABELS
     years = _years(years, supply_dict[STATE_BASE]["t"])
@@ -231,7 +235,8 @@ def plot_energy_balance_el(ctx, ea, *, years=None, sort_by="pE_baseline", legend
 def plot_energy_balance_dh(ctx, ha, *, years=None, sort_by="pH_baseline", legend_min_twh=0.0,
                            figsize=(12, 5), save_path_fmt=None, show=True, verbose=False,
                            legend_y=-0.2, state_labels=None):
-    """District-heat balance, baseline | shock, for heat area `ha`."""
+    """District-heat balance, baseline | shock, for heat area `ha` (or "DK" on a context
+    from `build_el_balance_data_country(..., market="H")`)."""
     return _plot_balance(ctx, ha, market=DH_MARKET, hatched=set(), years=years,
                          sort_by=sort_by, legend_min_twh=legend_min_twh, figsize=figsize,
                          save_path_fmt=save_path_fmt, show=show, verbose=verbose,

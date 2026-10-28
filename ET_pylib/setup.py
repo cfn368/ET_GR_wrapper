@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 
 from ET_pylib.groups import (
     ANALYSIS_YEAR, NUCLEAR_IDS, NUCLEAR_IDS_BY_GEO, use_geography,
-    c_aggs, c_aggs_countries, EA_TO_COUNTRY, STATES,
+    c_aggs, c_aggs_countries, EA_TO_COUNTRY, STATES, HA_AGGS, areas_of, market_of,
 )
 from ET_pylib.style import set_aej, col_names, area_colors, FIG_TEXT, print_table
 from ET_pylib.balance import (

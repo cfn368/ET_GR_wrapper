@@ -4,7 +4,8 @@ Price figures — price change per hour against the baseline price, and ΔCS by 
 
 Scatter of the shock - baseline price per state hour against the baseline price
 (marker size = hours represented) with hour-weighted means in equal-hour bins,
-optionally next to the ΔCS in the same bins.
+optionally next to the ΔCS in the same bins. The market (electricity or district
+heat) is the context's.
 """
 
 from __future__ import annotations
@@ -15,11 +16,9 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
-from .groups import (
-    DCIIA_TYPES, AREAS_WITHOUT_DCIIA, ANALYSIS_YEAR, STATES, as_list, areas_of, expand_areas,
-)
+from .groups import ANALYSIS_YEAR, STATES, as_list, areas_of, expand_areas, market_of
 from .style import (
-    FIG_TEXT, SCATTER_COLOR, SCATTER_NEUTRAL, ZERO_LINE, MISSING_COLOR,
+    FIG_TEXT, MARKET_TEXT, SCATTER_COLOR, SCATTER_NEUTRAL, ZERO_LINE, MISSING_COLOR,
     area_colors, col_names, color_of, label_of,
 )
 from ._util import equal_hour_bins
@@ -33,15 +32,15 @@ TITLE_X = 0.060
 # ==================== ==================== ==================== ====================
 # 1. state prices
 
-def _state_prices(sup, ea, year):
+def _state_prices(sup, ea, year, m):
     """The hFull-expanded frames collapsed to one row per state h; rows per h equal
-    hWeight, so `hours` needs no lookup in the db."""
+    hWeight, so `hours` needs no lookup in the db. `m` is the frames' `Market`."""
     cols = {}
     for state in STATES:
         df = sup[state]
-        g = df[(df["EA"] == ea) & (df["t"] == year)].groupby("h")["pE"]
+        g = df[(df[m.area_key] == ea) & (df["t"] == year)].groupby("h")[m.price]
         if (g.nunique() > 1).any():
-            raise ValueError(f"pE varies within a state h for {ea}, {year} ({state})")
+            raise ValueError(f"{m.price} varies within a state h for {ea}, {year} ({state})")
         cols[state] = g.first()
         if state == "baseline":
             cols["hours"] = g.size()
@@ -52,11 +51,11 @@ def _state_prices(sup, ea, year):
     return out
 
 
-def _agg_state_prices(sup, members, year, weight_col=None):
+def _agg_state_prices(sup, members, year, m, weight_col=None):
     """State prices averaged over several areas per state h: simple mean, or weights
     from `weight_col` in the baseline frame (fixed, so dp is a pure price effect)."""
-    members = list(expand_areas(members))
-    parts = {ea: _state_prices(sup, ea, year) for ea in members}
+    members = list(expand_areas(members, m.key))
+    parts = {ea: _state_prices(sup, ea, year, m) for ea in members}
 
     hours = parts[members[0]]["hours"]
     for ea, d in parts.items():
@@ -68,7 +67,7 @@ def _agg_state_prices(sup, members, year, weight_col=None):
     else:
         base = sup["baseline"]
         W = pd.DataFrame({
-            ea: base[(base["EA"] == ea) & (base["t"] == year)].groupby("h")[weight_col].mean()
+            ea: base[(base[m.area_key] == ea) & (base["t"] == year)].groupby("h")[weight_col].mean()
             for ea in members
         }).reindex(hours.index)
         if W.isna().any().any():
@@ -86,12 +85,14 @@ def _agg_state_prices_demand(ctx, members, year):
     """Aggregate price per state h with the table weights (`_regional_price` on the
     DC-IIA demand of each run), so dp includes any shift in the area demand mix.
     Areas without final demand are dropped."""
-    members = [ea for ea in members if ea not in AREAS_WITHOUT_DCIIA]
+    m = market_of(ctx.market)
+    area, price = m.area_key, m.price
+    members = [ea for ea in members if ea not in m.no_demand]
     yr = int(year)
 
     # hFull -> h from the supply frame (str keys: dtypes can differ between frames)
     sup_b = ctx.supply_dict["baseline"]
-    hmap = (sup_b.loc[sup_b["EA"].isin(members) & (sup_b["t"].astype(int) == yr), ["hFull", "h"]]
+    hmap = (sup_b.loc[sup_b[area].isin(members) & (sup_b["t"].astype(int) == yr), ["hFull", "h"]]
                  .drop_duplicates())
     hmap["hFull"] = hmap["hFull"].astype(str)
     if hmap["hFull"].duplicated().any():
@@ -101,23 +102,23 @@ def _agg_state_prices_demand(ctx, members, year):
     cols = {}
     for state in STATES:
         df = ctx.demand_dict[state]
-        df = df[df["EA"].isin(members) & (df["t"].astype(int) == yr)]
-        missing = set(members) - set(df["EA"].unique())
+        df = df[df[area].isin(members) & (df["t"].astype(int) == yr)]
+        missing = set(members) - set(df[area].unique())
         if missing:
             raise ValueError(f"No demand rows for {sorted(missing)}, {year} ({state})")
 
-        w_cols = [c for c in DCIIA_TYPES if c in df.columns]
+        w_cols = [c for c in m.weight_cols if c in df.columns]
         if not w_cols:
-            raise KeyError(f"None of DCIIA_TYPES {list(DCIIA_TYPES)} in the demand frame")
-        reg = _regional_price(df[["t", "EA", "hFull", "pE", *w_cols]],
-                              price="pE", weight_cols=tuple(w_cols))
+            raise KeyError(f"None of {list(m.weight_cols)} in the demand frame")
+        reg = _regional_price(df[["t", area, "hFull", price, *w_cols]],
+                              price=price, weight_cols=tuple(w_cols))
         reg["h"] = reg["hFull"].astype(str).map(hmap)
         if reg["h"].isna().any():
             raise ValueError(f"hFull without h mapping in {members}, {year} ({state})")
 
-        g = reg.groupby("h")["pE_region"]
+        g = reg.groupby("h")[f"{price}_region"]
         if not np.allclose(g.max(), g.min(), rtol=1e-9, atol=1e-6):
-            raise ValueError(f"Regional pE varies within a state h for {members}, {year} ({state})")
+            raise ValueError(f"Regional {price} varies within a state h for {members}, {year} ({state})")
         cols[state] = g.first()
         if state == "baseline":
             cols["hours"] = g.size()
@@ -134,7 +135,7 @@ def _agg_dispatch(ctx, members, year, weight_col):
     `_agg_state_prices` (None = simple mean)."""
     if weight_col == "demand":
         return _agg_state_prices_demand(ctx, members, year)
-    return _agg_state_prices(ctx.supply_dict, members, year, weight_col)
+    return _agg_state_prices(ctx.supply_dict, members, year, market_of(ctx.market), weight_col)
 
 
 # ==================== ==================== ==================== ====================
@@ -176,10 +177,12 @@ def _scatter_legend(link_color=None):
 
 def plot_price_change_scatter(ctx, areas, *, years=None, aggregates=None, weight_col="demand",
                               n_bins=5, marker_size=55, ncols=2, figsize=None, row_height=5.5,
-                              legend_y=0.0, title=FIG_TEXT["title_price_scatter"],
+                              legend_y=0.0, title=None,
                               save_path_fmt=None, show=True, scatter_color=SCATTER_COLOR):
     """Price change per state hour against the baseline price, one panel per area.
     `aggregates` maps a panel name to member areas, e.g. {"DK": ["DK1", "DK2"]}."""
+    m = market_of(ctx.market)
+    title = MARKET_TEXT[m.key]["title_price_scatter"] if title is None else title
     sup = ctx.supply_dict
     aggregates = aggregates or {}
     if years is None:
@@ -205,7 +208,7 @@ def plot_price_change_scatter(ctx, areas, *, years=None, aggregates=None, weight
             r, c = divmod(idx, ncols)
             ax = axes[r, c]
             d = (_agg_dispatch(ctx, aggregates[ea], year, weight_col) if ea in aggregates
-                 else _state_prices(sup, ea, year))
+                 else _state_prices(sup, ea, year, m))
             _draw_price_change_panel(ax, d, scatter_color or color_of(ea), n_bins, marker_size)
             ax.set_title(label_of(ea), loc="left")
             if c == 0:
@@ -236,22 +239,23 @@ def plot_price_change_and_cs(ctx, baseline_output, shock_output, region="DK", *,
                              members=None, weight_col="demand", n_bins=5, cs_scale=1.0,
                              marker_size=55, figsize=(12, 5.5), bar_width=0.6, decimals=0,
                              legend_y=0.0, left_title=FIG_TEXT["panel_price_change"],
-                             right_title=FIG_TEXT["panel_cs_change"],
-                             title=FIG_TEXT["title_price_scatter"],
+                             right_title=FIG_TEXT["panel_cs_change"], title=None,
                              scatter_color=SCATTER_NEUTRAL, link_color=None,
                              save_path=None, show=True):
     """Price change per state hour (left) next to ΔCS per baseline-price bin (right),
-    both on the same equal-hour bins of the region's aggregate price. `members`
-    defaults to the region's areas with final demand."""
+    both on the same equal-hour bins of the region's aggregate price, on the context's
+    market. `members` defaults to the region's areas with final demand."""
+    m = market_of(ctx.market)
+    title = MARKET_TEXT[m.key]["title_price_scatter"] if title is None else title
     year = ANALYSIS_YEAR if year is None else year
-    members = (list(expand_areas(members)) if members is not None
-               else [ea for ea in areas_of(region) if ea not in AREAS_WITHOUT_DCIIA])
+    members = (list(expand_areas(members, m.key)) if members is not None
+               else [ea for ea in areas_of(region, m.key) if ea not in m.no_demand])
 
     t_vals = ctx.supply_dict["baseline"]["t"]
     t_year = t_vals[t_vals.astype(int) == int(year)].iloc[0]   # dtype of t in supply_dict
     d = _agg_dispatch(ctx, members, t_year, weight_col)
     df = cs_by_agg_price_bin(baseline_output, shock_output, d, region, members,
-                             year=year, n_bins=n_bins, cs_scale=cs_scale)
+                             year=year, n_bins=n_bins, cs_scale=cs_scale, market=m.key)
 
     link_color = link_color or area_colors.get(region, MISSING_COLOR)
     fig, (ax_l, ax_r) = new_figure(1, 2, figsize=figsize)

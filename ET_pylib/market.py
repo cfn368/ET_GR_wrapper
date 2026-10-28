@@ -14,11 +14,11 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .groups import (
-    as_list, areas_of, EA_cols,
-    c_aggs, EA_TO_COUNTRY, DCIIA_TYPES, DH_DCIIA_TYPES, ANALYSIS_YEAR,
+    as_list, areas_of, market_of,
+    EA_TO_COUNTRY, DCIIA_TYPES, DH_DCIIA_TYPES, ANALYSIS_YEAR,
     NUCLEAR_PT, NUCLEAR_IDS, PT_RENAME, STATES,
 )
-from .style import STATE_SHORT, TOTAL_LABEL, print_table, label_of, area_label
+from .style import STATE_SHORT, TOTAL_LABEL, MARKET_TEXT, print_table, label_of, area_label
 from ._util import filter_years, years_list, level_isin, relabel_nuclear, cluster_members
 
 HOURS_PER_YEAR = 8760.0
@@ -27,15 +27,25 @@ HOURS_PER_YEAR = 8760.0
 # ==================== ==================== ==================== ====================
 # 0. regions and regional prices
 
-def _resolve_region(ea, country):
-    """(ea | country) -> (tuple of EAs, label). Fails loudly on an unknown country."""
+def _resolve_region(ea, country, market="E"):
+    """(ea | country) -> (tuple of areas, label) in `market`. Fails loudly on an
+    unknown region."""
+    m = market_of(market)
     if country is not None:
-        if country not in c_aggs and country not in EA_cols:
-            raise KeyError(f"unknown region {country!r}: use one of {sorted(c_aggs)} or a zone")
-        return areas_of(country), country
+        areas = areas_of(country, m.key)
+        if not set(areas) <= m.area_cols:
+            raise KeyError(f"unknown {m.key} region {country!r}: use an aggregate or one of "
+                           f"{sorted(m.area_cols)}")
+        return areas, country
     if ea is None:
         raise ValueError("pass ea= or country=")
     return (ea,), ea
+
+
+def require_el(ctx, what):
+    """Trade exists on the electricity market only."""
+    if ctx.market != "E":
+        raise ValueError(f"{what} needs an electricity context; district heat has no trade")
 
 
 def _regional_price(df, *, price="pE", weight_cols=DCIIA_TYPES):
@@ -54,11 +64,22 @@ def _regional_price(df, *, price="pE", weight_cols=DCIIA_TYPES):
 
 
 def _region_demand(ctx, state, target_eas, years):
-    """One state's demand frame, cut to `years` and `target_eas`, price + weight columns."""
+    """One state's demand frame, cut to `years` and `target_eas`, price + weight columns
+    of the context's market."""
+    m = market_of(ctx.market)
     dem = ctx.demand_dict[state]
-    df = dem[["t", "EA", "hFull", "pE", *[c for c in DCIIA_TYPES if c in dem.columns]]]
+    df = dem[["t", m.area_key, "hFull", m.price,
+              *[c for c in m.weight_cols if c in dem.columns]]]
     df = filter_years(df, years, what="demand")
-    return df[df["EA"].isin(target_eas)]
+    return df[df[m.area_key].isin(target_eas)]
+
+
+def _ctx_regional_price(ctx, state, target_eas, years):
+    """Regional price per (t, hFull) on the context's market: (frame, price column)."""
+    m = market_of(ctx.market)
+    reg = _regional_price(_region_demand(ctx, state, target_eas, years),
+                          price=m.price, weight_cols=m.weight_cols)
+    return reg, f"{m.price}_region"
 
 
 # ==================== ==================== ==================== ====================
@@ -66,12 +87,12 @@ def _region_demand(ctx, state, target_eas, years):
 
 def price_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR):
     """Demand-weighted moments (mean, std, skew, excess kurtosis) and min/max of the
-    regional hourly price."""
-    target_eas, label = _resolve_region(ea, country)
+    regional hourly price (electricity or district heat, by the context's market)."""
+    target_eas, label = _resolve_region(ea, country, ctx.market)
     rows = []
     for state in STATES:
-        reg = _regional_price(_region_demand(ctx, state, target_eas, years))
-        p, w = reg["pE_region"], reg["w"]
+        reg, pcol = _ctx_regional_price(ctx, state, target_eas, years)
+        p, w = reg[pcol], reg["w"]
         W = w.sum()
         mean = (w * p).sum() / W
         var = (w * (p - mean) ** 2).sum() / W
@@ -88,16 +109,16 @@ def scarcity_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR,
                      null_threshold=20.0, mangel_factor=2.0):
     """Share of hours (pct.) with a near-zero price (< null_threshold) and with a
     scarcity price (> mangel_factor x annual mean), on the regional price."""
-    target_eas, label = _resolve_region(ea, country)
+    target_eas, label = _resolve_region(ea, country, ctx.market)
     rows = []
     for state in STATES:
-        per_hour = _regional_price(_region_demand(ctx, state, target_eas, years))
-        wp = (per_hour["w"] * per_hour["pE_region"]).groupby(per_hour["t"]).sum()
+        per_hour, pcol = _ctx_regional_price(ctx, state, target_eas, years)
+        wp = (per_hour["w"] * per_hour[pcol]).groupby(per_hour["t"]).sum()
         annual = wp / per_hour.groupby("t")["w"].sum()
         per_hour = per_hour.assign(annual_mean=per_hour["t"].map(annual))
 
-        is_null = per_hour["pE_region"] < null_threshold
-        is_mangel = per_hour["pE_region"] > mangel_factor * per_hour["annual_mean"]
+        is_null = per_hour[pcol] < null_threshold
+        is_mangel = per_hour[pcol] > mangel_factor * per_hour["annual_mean"]
         N = len(per_hour)                            # real hours in the window
         rows.append({"run": state,
                      "nulpristime": 100 * is_null.sum() / N,
@@ -120,6 +141,7 @@ def trade_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR, value=Fals
                   drop_empty=True):
     """Trade by partner for one EA or one country. Export is valued at the origin's
     price (EA), import at the partner's price (EAEA)."""
+    require_el(ctx, "trade_summary")
     if country is not None:
         target_eas, origin_label = _resolve_region(None, country)
         target_eas = set(target_eas)
@@ -233,6 +255,7 @@ DH_PTS = ("HS", "SH", "BH", "EPH", "BP", "BB", "EX", NUCLEAR_PT, "PX", "EH")
 @dataclass(frozen=True)
 class _MarketSpec:
     """Everything that differs between the electricity and district-heat tables."""
+    key: str             # "E" / "H", the context's market
     area_key: str        # "EA" / "HA"
     price: str           # "pE" / "pH"
     cap_sym: str         # "ECap" / "HCap"
@@ -242,8 +265,16 @@ class _MarketSpec:
     ex_uplift: bool      # scale EX ids by (1 + Cv/Cm) -> condensing-equivalent
 
 
-EL_SPEC = _MarketSpec("EA", "pE", "ECap", DCIIA_TYPES, EL_PTS, "el", True)
-DH_SPEC = _MarketSpec("HA", "pH", "HCap", DH_DCIIA_TYPES, DH_PTS, "fjernvarme", False)
+EL_SPEC = _MarketSpec("E", "EA", "pE", "ECap", DCIIA_TYPES, EL_PTS, "el", True)
+DH_SPEC = _MarketSpec("H", "HA", "pH", "HCap", DH_DCIIA_TYPES, DH_PTS, "fjernvarme", False)
+_SPECS  = {"E": EL_SPEC, "H": DH_SPEC}
+
+
+def _spec_for(ctx, spec):
+    """The table spec of the context's market; raises if `spec` was fixed to the other one."""
+    if spec is not None and spec.key != ctx.market:
+        raise ValueError(f"a {spec.noun} table got a market={ctx.market!r} context")
+    return _SPECS[market_of(ctx.market).key]
 
 
 def _capture_core(sup, dem, spec, want):
@@ -358,7 +389,8 @@ def _widen(res, vals, deltas, label, ndigits, *, keep_if):
 
 
 def _capture_summary(ctx, spec, ea, country, years, pts):
-    target, label = _resolve_region(ea, country)
+    spec = _spec_for(ctx, spec)
+    target, label = _resolve_region(ea, country, spec.key)
     want = as_list(pts) if pts is not None else list(spec.pts)
     out = []
     for state in STATES:
@@ -376,7 +408,8 @@ def _capture_summary(ctx, spec, ea, country, years, pts):
 
 
 def _capacity_factor_summary(ctx, spec, ea, country, years, pts):
-    target, label = _resolve_region(ea, country)
+    spec = _spec_for(ctx, spec)
+    target, label = _resolve_region(ea, country, spec.key)
     want = as_list(pts) if pts is not None else list(spec.pts)
     out = []
     for state in STATES:
@@ -397,8 +430,9 @@ def _capacity_factor_summary(ctx, spec, ea, country, years, pts):
 
 
 def capture_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR, pts=None):
-    """Electricity generation-weighted capture price and value factor per Pt."""
-    return _capture_summary(ctx, EL_SPEC, ea, country, years, pts)
+    """Generation-weighted capture price and value factor per Pt, on the context's market
+    (electricity, or district heat for a market="H" context)."""
+    return _capture_summary(ctx, None, ea, country, years, pts)
 
 
 def heat_capture_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR, pts=None):
@@ -407,9 +441,9 @@ def heat_capture_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR, pts
 
 
 def capacity_factor_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR, pts=None):
-    """Electricity capacity factor: realised / (ECap x 8760) per Pt, EX ids at
-    condensing-equivalent capacity (1 + Cv/Cm)."""
-    return _capacity_factor_summary(ctx, EL_SPEC, ea, country, years, pts)
+    """Capacity factor on the context's market: realised / (ECap x 8760) per Pt, EX ids at
+    condensing-equivalent capacity (1 + Cv/Cm); HCap on a market="H" context."""
+    return _capacity_factor_summary(ctx, None, ea, country, years, pts)
 
 
 def heat_capacity_factor_summary(ctx, ea=None, *, country=None, years=ANALYSIS_YEAR, pts=None):
@@ -432,7 +466,8 @@ def _region_of(wide, region):
 
 
 def print_price_summary(ctx, *, eas=(), countries=(), years=ANALYSIS_YEAR):
-    """Price moments and scarcity hours, one block of baseline/shock rows per area."""
+    """Price moments and scarcity hours, one block of baseline/shock rows per area, on
+    the context's market."""
     frames = ([full_summary(ctx, ea=e, years=years) for e in as_list(eas) or []]
               + [full_summary(ctx, country=c, years=years) for c in as_list(countries) or []])
     df = pd.concat(frames)
@@ -443,7 +478,7 @@ def print_price_summary(ctx, *, eas=(), countries=(), years=ANALYSIS_YEAR):
         heads=["gns.", "min.", "maks.", "std.afv.", "skævhed", "kurtose", "nulpris", "mangel"],
         groups=["Pris (kr./MWh)"] * 4 + ["Fordeling"] * 2 + ["Timer (pct.)"] * 2,
         rules=range(2, len(df), 2),
-        title=f"Priser og knaphed — {_year_tag(years)}",
+        title=MARKET_TEXT[ctx.market]["title_price_table"].format(years=_year_tag(years)),
     )
 
 
@@ -486,8 +521,10 @@ def print_terms_of_trade_partner(ctx, *, country="DK", years=ANALYSIS_YEAR, incl
     )
 
 
-def print_capture(cap, *, region=None, year=None, spec=EL_SPEC):
-    """Capture price and value factor by plant type."""
+def print_capture(cap, *, region=None, year=None, market="E"):
+    """Capture price and value factor by plant type; `market` is the one `cap` was
+    built on ("H" for a district-heat context)."""
+    spec = _SPECS[market_of(market).key]
     df, label = _region_of(cap, region)
     df = df.sort_values("gen_basel", ascending=False)
     out = pd.DataFrame({
@@ -506,8 +543,10 @@ def print_capture(cap, *, region=None, year=None, spec=EL_SPEC):
     )
 
 
-def print_capacity_factor(cf, *, region=None, year=None, spec=EL_SPEC):
-    """Realised production and capacity factor by plant type."""
+def print_capacity_factor(cf, *, region=None, year=None, market="E"):
+    """Realised production and capacity factor by plant type; `market` as in
+    `print_capture`."""
+    spec = _SPECS[market_of(market).key]
     df, label = _region_of(cf, region)
     df = df.sort_values("realized_basel", ascending=False)
     out = pd.DataFrame({
@@ -527,8 +566,8 @@ def print_capacity_factor(cf, *, region=None, year=None, spec=EL_SPEC):
 
 
 def print_heat_capture(cap, **kw):
-    print_capture(cap, spec=DH_SPEC, **kw)
+    print_capture(cap, market="H", **kw)
 
 
 def print_heat_capacity_factor(cf, **kw):
-    print_capacity_factor(cf, spec=DH_SPEC, **kw)
+    print_capacity_factor(cf, market="H", **kw)

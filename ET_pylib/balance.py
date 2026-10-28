@@ -22,10 +22,10 @@ from typing import Mapping
 import pandas as pd
 
 from .groups import (
-    expand_areas,
+    expand_areas, market_of,
     _META_BUILD, _FULL_ORDER, _META_BUILD_HA, _FULL_ORDER_HA,
     CLAMP_SUPPLY, CLAMP_DEMAND, SPLIT_COLS, CLAMP_SUPPLY_HA, CLAMP_DEMAND_HA,
-    PT_RENAME, CTYPE_RENAME, DCIIA_TYPES, NUCLEAR_IDS, STATE_BASE, STATE_SHOCK, c_aggs,
+    PT_RENAME, CTYPE_RENAME, DCIIA_TYPES, NUCLEAR_IDS, STATE_BASE, STATE_SHOCK,
 )
 from ._util import (
     has_sym, sym_frame, set_frame, mapping, require_mapped, filter_years,
@@ -38,12 +38,14 @@ from ._util import (
 
 @dataclass
 class ElBalanceContext:
-    """The built frames per state, plus the source databases (for capacities)."""
+    """The built frames per state, plus the source databases (for capacities) and
+    the market they belong to ("E" electricity, "H" district heat)."""
 
     supply_dict: Mapping[str, pd.DataFrame]
     demand_dict: Mapping[str, pd.DataFrame]
     NX_dict: Mapping[str, pd.DataFrame] | None
     db_dict: Mapping[str, object]
+    market: str = "E"
 
 
 def _db_dict(baseline_output, shock_output):
@@ -273,9 +275,13 @@ def _attach_nx_baseline_price(NX_dict):
 
 
 def build_el_balance_data(baseline_output, shock_output=None, *,
-                          nuclear_ids=NUCLEAR_IDS, years=None) -> ElBalanceContext:
-    """Electricity supply / demand / net-export frames per state, by area.
-    `years` (int or iterable) restricts the build; None keeps every model year."""
+                          nuclear_ids=NUCLEAR_IDS, years=None, market="E") -> ElBalanceContext:
+    """Electricity supply / demand / net-export frames per state, by area; market="H"
+    gives the district-heat frames by heat area (`build_dh_balance_data`). `years`
+    (int or iterable) restricts the build; None keeps every model year."""
+    if market_of(market).key == "H":
+        return build_dh_balance_data(baseline_output, shock_output,
+                                     nuclear_ids=nuclear_ids, years=years)
     db_dict = _db_dict(baseline_output, shock_output)
     supply_dict, demand_dict, NX_dict = {}, {}, {}
 
@@ -298,46 +304,49 @@ def build_el_balance_data(baseline_output, shock_output=None, *,
 # ==================== ==================== ==================== ====================
 # 2. country aggregation: the Danish EAs collapsed into one "DK" area
 
-def _country_price(db, members, years=None):
+def _country_price(db, members, years=None, market="E"):
     """Per-(t, h) consumer-demand-weighted price across `members` (DKK/MWh), weighted
-    on qDemandE_DCIIA so the annual mean equals pEt_C_DK. An area without consumers
-    in a year (DK3) has no qDemandE_DCIIA rows and weight 0."""
-    w = "qDemandE_DCIIA"
-    p = sym_frame(db, "pE", years).merge(sym_frame(db, w, years), on=["t", "h", "EA"], how="left")
-    p = p[p["EA"].isin(members)].copy()
+    on final demand (qDemandE_DCIIA / qDemandH_DCIIA), so on the el side the annual mean
+    equals pEt_C_DK. An area without consumers in a year (DK3) has weight 0."""
+    m = market_of(market)
+    w, price, area = m.demand_sym, m.price, m.area_key
+    p = sym_frame(db, price, years).merge(sym_frame(db, w, years), on=["t", "h", area], how="left")
+    p = p[p[area].isin(members)].copy()
 
-    has_demand = p.groupby(["t", "EA"])[w].transform(lambda s: s.notna().any())
+    has_demand = p.groupby(["t", area])[w].transform(lambda s: s.notna().any())
     if (has_demand & p[w].isna()).any():
         raise ValueError(f"{w} missing for some hours of an area that has demand that year")
     p[w] = p[w].fillna(0)
 
-    p["wp"] = p["pE"] * p[w]
+    p["wp"] = p[price] * p[w]
     g = p.groupby(["t", "h"])[["wp", w]].sum()             # same hWeight across zones
     if (g[w] <= 0).any():
         raise ValueError(f"no {w} in any of {members} for some (t, h)")
-    return (g["wp"] / g[w]).rename("pE").reset_index()
+    return (g["wp"] / g[w]).rename(price).reset_index()
 
 
 def _collapse_supply(df_sup, members, price, meta, label):
-    """Sum supply over `members` into one `label` row per (t, h, hFull); country price."""
+    """Sum supply over `members` into one `label` row per (t, h, hFull); country price.
+    `meta` names the area key (meta[1]) and the price (meta[-1])."""
+    area, pcol = meta[1], meta[-1]
     series = [c for c in df_sup.columns if c not in meta]
-    sub = df_sup[df_sup["EA"].isin(members)]
+    sub = df_sup[df_sup[area].isin(members)]
     agg = sub.groupby(["t", "h", "hFull"], as_index=False).agg(
         {**{s: "sum" for s in series}, "hWeight": "first"}
     )
-    agg["EA"] = label
+    agg[area] = label
     agg = agg.merge(price, on=["t", "h"], how="left")
-    return agg.sort_values(["t", "pE"]).reset_index(drop=True)
+    return agg.sort_values(["t", pcol]).reset_index(drop=True)
 
 
-def _collapse_demand(df_dem, members, label):
-    """Sum demand over `members` into one `label` row (index t, h, EA)."""
+def _collapse_demand(df_dem, members, label, area="EA"):
+    """Sum demand over `members` into one `label` row (index t, h, area)."""
     d = df_dem.reset_index()
-    d = d[d["EA"].isin(members)]
-    series = [c for c in d.columns if c not in ("t", "h", "EA")]
+    d = d[d[area].isin(members)]
+    series = [c for c in d.columns if c not in ("t", "h", area)]
     agg = d.groupby(["t", "h"], as_index=False)[series].sum()
-    agg["EA"] = label
-    return agg.set_index(["t", "h", "EA"])
+    agg[area] = label
+    return agg.set_index(["t", "h", area])
 
 
 def _collapse_nx(nx, members, price_hf, label):
@@ -355,10 +364,15 @@ def _collapse_nx(nx, members, price_hf, label):
 
 
 def build_el_balance_data_country(baseline_output, shock_output=None, *,
-                                  nuclear_ids=NUCLEAR_IDS, country_areas=c_aggs["DK"],
-                                  country_label="DK", years=None) -> ElBalanceContext:
-    """Denmark-wide counterpart of `build_el_balance_data` (DK1 + DK2 + DK3)."""
-    country_areas = expand_areas(country_areas)
+                                  nuclear_ids=NUCLEAR_IDS, country_areas=None,
+                                  country_label="DK", years=None, market="E") -> ElBalanceContext:
+    """Denmark-wide counterpart of `build_el_balance_data` (DK1 + DK2 + DK3); market="H"
+    collapses the four heat areas instead. `country_areas` defaults to the label's areas."""
+    if market_of(market).key == "H":
+        return _build_dh_country(baseline_output, shock_output, nuclear_ids=nuclear_ids,
+                                 country_areas=country_areas, country_label=country_label,
+                                 years=years)
+    country_areas = expand_areas(country_label if country_areas is None else country_areas)
     db_dict = _db_dict(baseline_output, shock_output)
     supply_dict, demand_dict, NX_dict = {}, {}, {}
 
@@ -458,4 +472,27 @@ def build_dh_balance_data(baseline_output, shock_output=None, *,
 
     _attach_baseline_price(supply_dict, "HA", "pH")
     _attach_baseline_price(demand_dict, "HA", "pH")
-    return ElBalanceContext(supply_dict, demand_dict, None, db_dict)
+    return ElBalanceContext(supply_dict, demand_dict, None, db_dict, market="H")
+
+
+def _build_dh_country(baseline_output, shock_output, *, nuclear_ids, country_areas,
+                      country_label, years):
+    """Heat areas collapsed into one `country_label` area, price weighted on final heat demand."""
+    country_areas = expand_areas(country_label if country_areas is None else country_areas,
+                                 market="H")
+    db_dict = _db_dict(baseline_output, shock_output)
+    supply_dict, demand_dict = {}, {}
+
+    for state, db in db_dict.items():
+        hw, h2hf = _hours(db)
+        price = _country_price(db, country_areas, years, market="H")
+        df_sup = _collapse_supply(_supply_shh(db, nuclear_ids, hw, h2hf, years),
+                                  country_areas, price, _META_BUILD_HA, country_label)
+        df_dem = _collapse_demand(_demand_dhh(db, hw, years), country_areas, country_label,
+                                  area="HA")
+        supply_dict[state], demand_dict[state] = _assemble(
+            df_sup, df_dem, _META_BUILD_HA, _FULL_ORDER_HA, CLAMP_SUPPLY_HA, nx=None)
+
+    _attach_baseline_price(supply_dict, "HA", "pH")
+    _attach_baseline_price(demand_dict, "HA", "pH")
+    return ElBalanceContext(supply_dict, demand_dict, None, db_dict, market="H")

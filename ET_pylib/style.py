@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 import pandas as pd
 
-from .groups import NUCLEAR_PT, PARTNER_ORDER, c_aggs
+from .groups import NUCLEAR_PT, PARTNER_ORDER, c_aggs, HA_AGGS
 
 
 # ==================== ==================== ==================== ====================
@@ -68,6 +68,9 @@ col_names_en = {
     "DK1": "Denmark (West)",
     "DK2": "Denmark (East)",
     "DK3": "Denmark (Bornholm)",
+    # district-heat areas
+    "DK1_C": "West Denmark, central", "DK1_D": "West Denmark, decentral",
+    "DK2_C": "East Denmark, central", "DK2_D": "East Denmark, decentral",
     "NorthSea": "North Sea",
     "NOS": "Norway (South)",
     "NOM": "Norway (Middle)",
@@ -138,6 +141,9 @@ col_names_da = {
     "DK1": "Danmark (Vest)",
     "DK2": "Danmark (Øst)",
     "DK3": "Danmark (Bornholm)",
+    # district-heat areas
+    "DK1_C": "Vestdanmark, central", "DK1_D": "Vestdanmark, decentral",
+    "DK2_C": "Østdanmark, central", "DK2_D": "Østdanmark, decentral",
     "NorthSea": "Nordsøen",
     "NOS": "Norge (syd)",
     "NOM": "Norge (midt)",
@@ -273,6 +279,33 @@ FIG_TEXT = {
     "price_bin_fmt":      "{lo}–{hi} %",
 }
 
+# Figure text that differs between the electricity ("E") and district-heat ("H") market.
+MARKET_TEXT = {
+    "E": {**{k: FIG_TEXT[k] for k in ("title_price_levels", "title_price_delta",
+                                      "title_capture_delta", "title_price_scatter",
+                                      "title_gen_stack", "title_gen_delta",
+                                      "title_cs_price_bin")},
+          "title_price_table": "Priser og knaphed — {years}",
+          "title_cs_table":    "Forbrugeroverskud, el — {year}",
+          "title_qty_table":   "Elproduktion — {areas}, {year}"},
+    "H": {
+        "title_price_levels":  "Efterspørgselsvægtet fjernvarmepris pr. region i {year}",
+        "title_price_delta":   "Effekt af stødet på fjernvarmeprisen pr. region i {year} "
+                               "({unit}, {note})",
+        "title_capture_delta": "Ændring i fangstpris for fjernvarme pr. produktionstype "
+                               "i {region}, {year}",
+        "title_price_scatter": "Ændring i fjernvarmepris og forbrugeroverskud pr. time",
+        "title_gen_stack":     "Fjernvarmeproduktion pr. region i {year}",
+        "title_gen_delta":     "Ændring i fjernvarmeproduktion pr. produktionstype i {year}",
+        "title_cs_price_bin":  "Ændring i forbrugeroverskud på fjernvarme fordelt på "
+                               "prisniveau, {year}",
+        "title_price_table":   "Fjernvarmepriser og knaphed — {years}",
+        "title_cs_table":      "Forbrugeroverskud, fjernvarme — {year}",
+        "title_qty_table":     "Fjernvarmeproduktion — {areas}, {year}",
+    },
+}
+assert set(MARKET_TEXT["E"]) == set(MARKET_TEXT["H"]), "MARKET_TEXT keys out of sync"
+
 
 def _dk_swap(txt):
     return txt.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
@@ -287,7 +320,7 @@ def dk_num(value, decimals: int = 0, signed: bool = False) -> str:
 def area_label(areas):
     """Danish name of an area scope: a known aggregate by name, else its zones."""
     areas = (areas,) if isinstance(areas, str) else tuple(areas)
-    for name, members in c_aggs.items():
+    for name, members in (*c_aggs.items(), *HA_AGGS.items()):
         if set(members) == set(areas):
             return col_names.get(name, name)
     return col_names.get(areas[0], areas[0]) if len(areas) == 1 else "+".join(areas)
@@ -398,6 +431,8 @@ area_colors = {
     "distrLoss": "#F4A3A3", "trLoss": "#F7C6C6",
     # price zones
     "DK1": "#A05A5A", "DK2": "#C27B7B", "DK3": "#D9A3A3", "NorthSea": "#3E6E8E",
+    # district-heat areas (zone hue, decentral lighter)
+    "DK1_C": "#A05A5A", "DK1_D": "#C98F8F", "DK2_C": "#C27B7B", "DK2_D": "#DDB0B0",
     "NOS": "#5B7C99", "NON": "#7F9DB8", "NOM": "#A6BED3",
     "SE1": "#C9A227", "SE2": "#D8B43C", "SE3": "#E5C85A", "SE4": "#F0DC7A",
     "FI": "#8FB996", "EELVLT": "#6E9C76",
@@ -417,6 +452,14 @@ PT_AGG_COLORS = {
     "Regulerbar": "#6F4E37",
     "Varme":      "#D2B48C",
     "Kernekraft": "#000000",
+    # district-heat buckets
+    "Kraftvarme":     "#D2B48C",
+    "Elvarme":        "#E78AC3",
+    "Kedler":         "#8B5A2B",
+    "Solvarme":       "#F5A623",
+    "Varmelager":     "#0B3C5D",
+    "Eksogen varme":  "#A0785A",
+    "Overskudsvarme": "#8E63CE",
 }
 
 # navy = baseline, red = shock (matches the Excel workbooks)

@@ -2,7 +2,9 @@
 import numpy as np
 import pandas as pd
 
-from ET_pylib.groups import NUC_ID_BY_EA as NUC_IDS, NUC_HA_BY_EA, NUC_ID_BY_HA
+from ET_pylib.groups import (
+    NUC_ID_BY_EA as NUC_IDS, NUC_HA_BY_EA, NUC_ID_BY_HA, WS_CF_2040, NUC_TWH_CHP_2040,
+)
 from ET_pylib.costs import nuc_wind_swap  # noqa: F401  re-exported for 2_Analysis
 
 
@@ -34,7 +36,9 @@ def nuc_plants(gw, start_year, *, Eff, VOM, UranTax, FOM, sigmaID,
                              ft=ft, bft=bft, inputs=dict(inputs), **extra)
                   for ea, v in gw.items() if v > 0]
     else:
-        plants = [AddedPlant(id=NUC_ID_BY_HA[ha], ea=ea, ha=ha, pt="EX", ecap=u["ECap"],
+        # AddedPlant takes the condensing capacity of an EX unit and sets ECap = ecap/(1 + Cv/Cm)
+        # itself (checked on the KF26 CHP run), so the nameplate GW goes in, not u["ECap"].
+        plants = [AddedPlant(id=NUC_ID_BY_HA[ha], ea=ea, ha=ha, pt="EX", ecap=u["GW"],
                              cm=u["Cm"], cv=u["Cv"], start_year=start_year, ft=ft, bft=bft,
                              inputs={**inputs, **ex_inputs(u, Eff=Eff, VOM=VOM, UranTax=UranTax,
                                                            FOM=FOM, **chp)}, **extra)
@@ -44,6 +48,20 @@ def nuc_plants(gw, start_year, *, Eff, VOM, UranTax, FOM, sigmaID,
     if not plants:
         raise ValueError("No nuclear capacity given.")
     return plants
+
+
+def energy_cuts(gw, start_year, *, nuc_twh=NUC_TWH_CHP_2040, ws_cf=WS_CF_2040, pt="WS"):
+    """Offshore wind cut whose lost production equals the nuclear el output `nuc_twh`
+    (TWh/yr), split over areas by the nameplate in `gw` ({EA: GWe}): GW = TWh / (CF x 8.76)."""
+    from pyGRE.makeModels.kf26_added_plants import fixed_cuts
+    unknown = set(gw) - set(ws_cf)
+    if unknown:
+        raise KeyError(f"No wind capacity factor for {sorted(unknown)}. Known: {sorted(ws_cf)}")
+    total = sum(v for v in gw.values() if v > 0)
+    if total <= 0 or nuc_twh <= 0:
+        raise ValueError(f"Need positive nuclear capacity and output, got {gw}, {nuc_twh} TWh")
+    cut = {ea: nuc_twh * v / total / (ws_cf[ea] * 8.76) for ea, v in gw.items() if v > 0}
+    return fixed_cuts(cut, pt=pt, start_year=start_year)
 
 
 def heat_shares(db_base, year):

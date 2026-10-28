@@ -15,7 +15,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .groups import NUC_ID_BY_EA, NUCLEAR_IDS, NUCLEAR_PT, c_aggs, as_list, expand_areas
+from .groups import (
+    NUC_ID_BY_EA, NUC_ID_BY_HA, NUCLEAR_IDS, NUCLEAR_PT, c_aggs, as_list, expand_areas,
+)
 from .style import STATE_SHORT, dk_num, label_of, area_label, print_table
 from ._util import sym_year, id_map
 
@@ -27,7 +29,7 @@ R, T    = 0.04, 40                   # real discount rate, technical lifetime (y
 EUR_DKK = 7.46                       # fixed-rate peg, mio. kr. per MEUR
 
 PLANT_UNITS = {                      # CAPEX MEUR/MW, lifetime yr, annual FOM as % of CAPEX
-    "Nuclear":      (8,     60, 164/100),   # ET / FOA / OECD-IEA
+    "Nuclear":      (8*1.15,     60, 164/100),   # ET / FOA / OECD-IEA
     "WindOffshore": (25/10, 30, 192/100),   # ET / FOA / ET
 }
 PLANT_OWNERS = {                     # technology -> countries carrying the cost
@@ -58,21 +60,30 @@ RATE_SCHEDULES = {
 # ==================== ==================== ==================== ====================
 # 2. capacity swap read off the solved databases
 
+NUC_AREA_OF = {i: a for a, i in (*NUC_ID_BY_EA.items(), *NUC_ID_BY_HA.items())}   # row labels
+
 def nuc_wind_swap(baseline, shock, yr, dk=("DK1", "DK2"), wind=("WS",), verbose=True,
                   nuc_ids=None):
-    """Nuclear capacity added vs. offshore wind displaced in `yr`.
-    Returns (nuc, cut): per-id frames of GW."""
-    nuc_ids = list(NUC_ID_BY_EA.values()) if nuc_ids is None else as_list(nuc_ids)
+    """Nuclear capacity added vs. offshore wind displaced in `yr`. Returns (nuc, cut):
+    per-id frames of GW. `nuc_ids` defaults to every NUCLEAR_IDS id the shock carries;
+    GW_cond is the condensing nameplate, ECap x (1 + Cv/Cm) on EX units."""
+    nuc_ids = list(NUCLEAR_IDS) if nuc_ids is None else as_list(nuc_ids)
     dk, wind = expand_areas(dk), as_list(wind)
     xs = lambda db, sym: sym_year(db, sym, yr).astype("float64")
     b, s, hcap = xs(baseline, "ECap"), xs(shock, "ECap"), xs(shock, "HCap")
+    cm, cv = xs(shock, "Cm"), xs(shock, "Cv")
     pt, ea = id_map(shock("id2Pt")), id_map(shock("id2EA"))
+    fac = (1.0 + cv.reindex(nuc_ids) / cm.reindex(nuc_ids)).fillna(1.0)   # 1 on CD units
 
     nuc = pd.DataFrame({"EA": ea.reindex(nuc_ids).values, "Pt": pt.reindex(nuc_ids).values,
                         "GW_base": b.reindex(nuc_ids, fill_value=0.0).values,
                         "GW_added": s.reindex(nuc_ids, fill_value=0.0).values,
-                        "GW_heat": hcap.reindex(nuc_ids, fill_value=0.0).values}, index=nuc_ids)
-    nuc = nuc[nuc["EA"].isin(dk)]
+                        "GW_heat": hcap.reindex(nuc_ids, fill_value=0.0).values,
+                        "fac": fac.values}, index=nuc_ids)
+    nuc["GW_cond"] = nuc["GW_added"] * nuc["fac"]
+    nuc = nuc[nuc["EA"].isin(dk)].drop(columns="fac")
+    if nuc.empty:
+        raise KeyError(f"no nuclear ids ({sorted(nuc_ids)}) in {list(dk)} -- is shock the nuclear run?")
 
     w = [i for i in pt.index[pt.isin(wind)] if i not in nuc_ids]
     base_w, shock_w = b.reindex(w, fill_value=0.0), s.reindex(w, fill_value=0.0)
@@ -87,21 +98,24 @@ def nuc_wind_swap(baseline, shock, yr, dk=("DK1", "DK2"), wind=("WS",), verbose=
 
 
 def print_swap(nuc, cut, yr, wind=("WS",)):
-    """Capacity-swap table (GW): nuclear added per area, wind removed per area, totals."""
+    """Capacity-swap table (GW): nuclear added per unit (condensing nameplate), wind
+    removed per area, totals."""
     nuc_label = label_of(NUCLEAR_PT)
     wind = as_list(wind)
     wind_label = label_of(wind[0]) if len(wind) == 1 else "Vind"
-    rows = {f"{nuc_label} {r.EA}": [r.GW_base, r.GW_added, r.GW_added - r.GW_base]
-            for _, r in nuc.sort_values("EA").iterrows()}
+    unit = {i: NUC_AREA_OF.get(i, r.EA) for i, r in nuc.iterrows()}
+    rows = {f"{nuc_label} {unit[i]}": [r.GW_base, r.GW_cond, r.GW_cond - r.GW_base]
+            for i, r in nuc.sort_values("EA").iterrows()}
     for (a, p), r in cut.groupby(["EA", "Pt"])[["GW_base", "GW_cut"]].sum().iterrows():
         rows[f"{label_of(p)} {a}"] = [r.GW_base, r.GW_base - r.GW_cut, -r.GW_cut]
     n = len(rows)
 
-    d_nuc = float((nuc.GW_added - nuc.GW_base).sum())
+    d_nuc = float((nuc.GW_cond - nuc.GW_base).sum())
     d_wind = float(-cut.GW_cut.sum())
     rows[f"{nuc_label} i alt"] = [None, None, d_nuc]
     rows[f"{wind_label} i alt"] = [None, None, d_wind]
     if nuc.GW_heat.abs().sum() > 0:
+        rows[f"{nuc_label}, el i modtryk (GWe)"] = [None, None, float(nuc.GW_added.sum())]
         rows[f"{nuc_label}, varme (GW-th)"] = [None, None, float(nuc.GW_heat.sum())]
 
     notes = []
@@ -115,11 +129,10 @@ def print_swap(nuc, cut, yr, wind=("WS",)):
                 title=f"Kapacitetsbytte — {yr}", unit="GW", notes=notes)
 
 
-def swap_deltas(nuc, cut, *, include_heat=True):
-    """Signed GW deltas {Nuclear, WindOffshore} for `plant_cost`. Nuclear capacity
-    splits across ECap (el) and HCap (heat); the entered nameplate is their sum."""
-    gw = nuc["GW_added"] + (nuc["GW_heat"] if include_heat else 0.0)
-    return pd.Series({"Nuclear": float(gw.sum()),
+def swap_deltas(nuc, cut):
+    """Signed GW deltas {Nuclear, WindOffshore} for `plant_cost`. Nuclear is costed on
+    its condensing nameplate (GWe): heat extraction on an EX unit is part of that plant."""
+    return pd.Series({"Nuclear": float(nuc["GW_cond"].sum()),
                       "WindOffshore": -float(cut["GW_cut"].sum())})
 
 

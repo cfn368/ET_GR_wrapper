@@ -17,7 +17,7 @@ import pandas as pd
 from .groups import (
     as_list, areas_of, expand_areas, market_of,
     c_aggs, EA_TO_COUNTRY, SCAND_ZONES, NUCLEAR_IDS, PT_RENAME, HEAT_PTS,
-    ANALYSIS_YEAR, REGION_ORDER, NUC_ID_BY_EA, NUC_ID_BY_HA,
+    ANALYSIS_YEAR, REGION_ORDER,
 )
 from .style import (
     STATE_SHORT, TOTAL_LABEL, MARKET_TEXT, dk_num, price_bin_labels, print_table, label_of,
@@ -26,7 +26,7 @@ from .style import (
 from ._util import id_map, filter_years, relabel_nuclear, active_line_export, equal_hour_bins
 from .costs import (
     R, SYSCOST_SPECS, NUC_SYSCOST_ORE_KWH, ORE_KWH_PR_TWH,
-    annuity_by_tech, swap_deltas, syscost_mio, nuc_wind_swap,
+    annuity_by_tech, swap_deltas, syscost_mio, nuc_wind_swap, NUC_AREA_OF,
 )
 
 DK = c_aggs["DK"]
@@ -432,7 +432,8 @@ def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
     """Per nuclear id + total: output, extra TWh when forced to run at u_min of
     capacity in every hour, average price of the extra output, and the welfare
     change dW (mio. kr./yr). dW < 0; the value of GR's flexibility is -dW. The ids are
-    the NUCLEAR_IDS this db carries (CD or EX variant)."""
+    the NUCLEAR_IDS this db carries. EX units are held to u_min of the reactor:
+    condensing capacity ECap(1 + Cv/Cm), load SEh + Cv·SHh, MC = MC_EX / (1 + Cv/Cm)."""
     m = db("id2EA").to_frame(index=False).astype(str)
     m.columns = ["id", "EA"]
     ids = [str(i) for i, start in NUCLEAR_IDS.items()
@@ -451,14 +452,34 @@ def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
     df = df[df["id"].isin(ids)].merge(m, on="id")
     if set(df["id"]) != set(ids):
         raise KeyError(f"nuclear ids missing from SEh in {year}: {sorted(set(ids) - set(df['id']))}")
-    for sym, on in (("pE", ["h", "EA"]), ("hWeight", ["h"]), ("ECap", ["id"]), ("MC", ["id"])):
+    for sym, on in (("pE", ["h", "EA"]), ("hWeight", ["h"]), ("ECap", ["id"])):
         df = df.merge(_long(sym), on=on, how="left")
-    if df[["pE", "hWeight", "ECap", "MC"]].isna().any().any():
-        raise ValueError("missing pE, hWeight, ECap or MC after merge")
+
+    # per plant: condensing factor, el lost per heat, marginal cost per MWh el
+    plant = pd.DataFrame({"id": ids})
+    for sym in ("MC", "MC_EX", "Cm", "Cv"):
+        if sym in db.symbols:
+            plant = plant.merge(_long(sym), on="id", how="left")
+        else:
+            plant[sym] = np.nan
+    ex = plant["Cm"].notna() & plant["Cv"].notna()
+    plant["fac"] = np.where(ex, 1.0 + plant["Cv"] / plant["Cm"], 1.0)
+    plant["mc"] = np.where(ex, plant["MC_EX"] / plant["fac"], plant["MC"])
+    plant["cv"] = plant["Cv"].where(ex, 0.0)
+    df = df.merge(plant[["id", "fac", "mc", "cv"]], on="id", how="left")
+    if "SHh" in db.symbols:
+        df = df.merge(_long("SHh"), on=["h", "id"], how="left")
+    else:
+        df["SHh"] = np.nan
+    df["SHh"] = df["SHh"].fillna(0.0)                                # no heat on CD units
+    bad = df[df[["pE", "hWeight", "ECap", "mc"]].isna().any(axis=1)]["id"].unique()
+    if len(bad):
+        raise ValueError(f"missing pE, hWeight, ECap or MC (MC_EX for EX) for {sorted(bad)}")
 
     q = df["SEh"] / 1000.0                                           # GWh -> TWh
-    df["dq"] = (u_min * df["hWeight"] * df["ECap"] / 1000.0 - q).clip(lower=0.0)
-    df["dW"] = (df["pE"] - df["MC"] - syscost * ORE_KWH_PR_TWH) * df["dq"]
+    load = (df["SEh"] + df["cv"] * df["SHh"]) / 1000.0               # reactor load, el-equivalent
+    df["dq"] = (u_min * df["hWeight"] * df["ECap"] * df["fac"] / 1000.0 - load).clip(lower=0.0)
+    df["dW"] = (df["pE"] - df["mc"] - syscost * ORE_KWH_PR_TWH) * df["dq"]
     df["q"], df["p_dq"] = q, df["pE"] * df["dq"]
 
     s = df.groupby("id")[["q", "dq", "p_dq", "dW"]].sum()
@@ -469,7 +490,7 @@ def nuc_flex_value(db, *, year, u_min=1.0, syscost=NUC_SYSCOST_ORE_KWH):
 
 def print_flex(db, *, year, u_mins=(1.0,), syscost=NUC_SYSCOST_ORE_KWH):
     """`nuc_flex_value` per minimum load: one table per u_min, plants then total."""
-    ea_of = {i: a for a, i in (*NUC_ID_BY_EA.items(), *NUC_ID_BY_HA.items())}
+    ea_of = NUC_AREA_OF
     for u in as_list(u_mins):
         f = nuc_flex_value(db, year=year, u_min=u, syscost=syscost)
         f.index = [TOTAL_LABEL if i == "total" else f"{label_of('Nuclear')} {ea_of.get(i, i)}"
@@ -553,7 +574,7 @@ def syscost_twh(baseline_output, shock_output, spec, *, year, areas, id2Pt, id2E
 
 
 def welfare_block(baseline_output, shock_output, *, year, deltas=None, annuity=None,
-                  regions=("DK",), markets=("E",), include_ci=True, include_heat=True,
+                  regions=("DK",), markets=("E",), include_ci=True,
                   id2Pt=None, id2EA=None, r=R, units=None, owners=None, col="annuitet",
                   unit="mio", syscosts=SYSCOST_SPECS, rates=None, twh=None, nuc_u_min=0.3):
     """Welfare decomposition + annuity + system costs, components x regions.
@@ -582,7 +603,7 @@ def welfare_block(baseline_output, shock_output, *, year, deltas=None, annuity=N
     if annuity is None:
         if deltas is None:
             nuc, cut = nuc_wind_swap(baseline_output, shock_output, yr=year, verbose=False)
-            deltas = swap_deltas(nuc, cut, include_heat=include_heat)
+            deltas = swap_deltas(nuc, cut)
         ann_mio = annuity_by_tech(deltas, r=r, units=units, owners=owners, scale=1.0, col=col)
     elif hasattr(annuity, "columns"):
         ann_mio = annuity.copy()

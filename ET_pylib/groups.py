@@ -125,7 +125,12 @@ NUC_ID_BY_EA      = {"DK1": "idNUC_DK1", "DK2": "idNUC_DK2"}
 NUC_HA_BY_EA      = {"DK1": ("DK1_C", "DK1_D"), "DK2": ("DK2_C", "DK2_D")}
 NUC_ID_BY_HA      = {ha: f"idNUC_{ha}" for has in NUC_HA_BY_EA.values() for ha in has}
 NUC_START_YEAR    = 2035
-_NUC_ALL_IDS      = (*NUC_ID_BY_EA.values(), *NUC_ID_BY_HA.values())   # CD and EX variants
+# Hardcoded basis of the energy-equivalent wind cut (ET_shocks.nucShock.energy_cuts):
+# offshore wind CF in the 2040 baseline (SEh / ECap x 8760) and nuclear el in the CHP run
+# (6.21 TWh at 0.85 GWe, scaled to the intended 1 GWe; update after the rerun).
+WS_CF_2040        = {"DK1": 0.520, "DK2": 0.467}
+NUC_TWH_CHP_2040  = 7.30
+_NUC_ALL_IDS     = (*NUC_ID_BY_EA.values(), *NUC_ID_BY_HA.values())   # CD and EX variants
 NUCLEAR_IDS_BY_GEO = {
     "disaggEA": {i: NUC_START_YEAR for i in _NUC_ALL_IDS},
     "aggEA":    {i: NUC_START_YEAR for i in _NUC_ALL_IDS},

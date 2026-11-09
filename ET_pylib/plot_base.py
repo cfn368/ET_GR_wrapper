@@ -70,7 +70,7 @@ def new_figure(nrows=1, ncols=1, *, figsize=FIGSIZE_WIDE, **kw):
     return fig, axes
 
 
-def layout_bars(fig, *, title, rect=(0, 0.06, 1, 0.0), w_pad=None):
+def layout_bars(fig, *, title, rect=(0, 0, 1, 1), w_pad=None):
     """Bar-figure layout with the title aligned with the leftmost axes. Call before a
     legend placed below the x-labels."""
     kw = {} if w_pad is None else {"w_pad": w_pad}
@@ -80,7 +80,7 @@ def layout_bars(fig, *, title, rect=(0, 0.06, 1, 0.0), w_pad=None):
     fig.tight_layout(rect=list(rect), **kw)
 
 
-def finish(fig, *, title, save_path, show, rect=(0, 0.06, 1, 0.0), w_pad=None):
+def finish(fig, *, title, save_path, show, rect=(0, 0, 1, 1), w_pad=None):
     """Bar-figure tail: layout, save, show."""
     layout_bars(fig, title=title, rect=rect, w_pad=w_pad)
     save_show(fig, save_path=save_path, show=show)

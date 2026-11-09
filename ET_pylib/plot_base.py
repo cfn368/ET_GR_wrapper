@@ -18,7 +18,7 @@ from matplotlib.patches import Patch
 from .style import (
     BG_COLOR, TEXT_COLOR, PANEL_EDGE, PANEL_EDGE_LW, FIGSIZE_WIDE, FIG_TEXT,
     MISSING_COLOR, PRICE_LINE_COLOR, HATCH_EDGE, ZERO_LINE, col_names, dk_num,
-    PAIR_WSPACE, TITLE_GAP_IN, LEGEND_GAP_IN, LEGEND_MAX_COLS,
+    PAIR_WSPACE, TITLE_GAP_IN, LEGEND_GAP_IN, LEGEND_MAX_COLS, NET_LABEL_OFFSET_PT,
 )
 
 
@@ -70,17 +70,20 @@ def new_figure(nrows=1, ncols=1, *, figsize=FIGSIZE_WIDE, **kw):
     return fig, axes
 
 
-def finish(fig, *, title, save_path, show, rect=(0, 0.06, 1, 0.0), w_pad=None):
-    """Bar-figure tail: title aligned with the leftmost axes, layout, save, show."""
+def layout_bars(fig, *, title, rect=(0, 0.06, 1, 0.0), w_pad=None):
+    """Bar-figure layout with the title aligned with the leftmost axes. Call before a
+    legend placed below the x-labels."""
     kw = {} if w_pad is None else {"w_pad": w_pad}
     fig.tight_layout(rect=list(rect), **kw)
     x0 = min(ax.get_position().x0 for ax in fig.axes)
     fig.suptitle(title, x=x0, ha="left", fontweight="bold")
     fig.tight_layout(rect=list(rect), **kw)
-    if save_path:
-        fig.savefig(save_path, dpi=300, facecolor=fig.get_facecolor())
-    if show:
-        plt.show()
+
+
+def finish(fig, *, title, save_path, show, rect=(0, 0.06, 1, 0.0), w_pad=None):
+    """Bar-figure tail: layout, save, show."""
+    layout_bars(fig, title=title, rect=rect, w_pad=w_pad)
+    save_show(fig, save_path=save_path, show=show)
 
 
 def finish_fixed(fig, *, title, x, rect, save_path, show):
@@ -94,8 +97,23 @@ def finish_fixed(fig, *, title, x, rect, save_path, show):
         plt.show()
 
 
-def bottom_legend(fig, handles, labels, *, legend_y, ncol):
-    fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, legend_y),
+def _below_axes(fig):
+    """Figure y LEGEND_GAP_IN below the lowest axes decoration (tick labels, x-label)."""
+    renderer = fig.canvas.get_renderer()
+    bottom = min(ax.get_tightbbox(renderer).y0 for ax in fig.axes)
+    return _figure_y(fig, bottom) - LEGEND_GAP_IN / fig.get_figheight()
+
+
+def _legend_anchor(fig, legend_y):
+    """(loc, y): lower edge at `legend_y`, or with None the top just below the x-labels."""
+    return ("upper center", _below_axes(fig)) if legend_y is None else ("lower center", legend_y)
+
+
+def bottom_legend(fig, handles, labels, *, legend_y=None, ncol):
+    """Bottom legend in one block. `legend_y=None` puts its top LEGEND_GAP_IN below the
+    lowest x-label, so call it after the layout."""
+    loc, y = _legend_anchor(fig, legend_y)
+    fig.legend(handles, labels, loc=loc, bbox_to_anchor=(0.5, y),
                ncol=ncol, frameon=False, fontsize=11)
 
 
@@ -143,12 +161,7 @@ def grouped_legend(fig, groups, *, legend_y=None, max_cols=LEGEND_MAX_COLS):
             handles += [blank()] + hs[i:i + n] + [blank() for _ in range(pad)]
             labels += [header if j == 0 else ""] + ls[i:i + n] + [""] * pad
             i += n
-    if legend_y is None:
-        renderer = fig.canvas.get_renderer()
-        bottom = min(ax.get_tightbbox(renderer).y0 for ax in fig.axes)
-        loc, y = "upper center", _figure_y(fig, bottom) - LEGEND_GAP_IN / fig.get_figheight()
-    else:
-        loc, y = "lower center", legend_y
+    loc, y = _legend_anchor(fig, legend_y)
     leg = fig.legend(handles, labels, loc=loc, bbox_to_anchor=(0.5, y),
                      ncol=sum(cols), frameon=False, fontsize=11)
     for k in headers:
@@ -237,7 +250,7 @@ def draw_grouped(ax, labels, series, *, colors, series_labels, ylabel, decimals,
 
 
 def plot_grouped(labels, series, *, colors, series_labels, title, ylabel, decimals,
-                 signed=False, figsize=FIGSIZE_WIDE, bar_width=0.38, legend_y=-0.06,
+                 signed=False, figsize=FIGSIZE_WIDE, bar_width=0.38, legend_y=None,
                  edge_keys=(), save_path=None, show=True):
     """Grouped bars over `labels` as a finished figure."""
     fig, ax = new_figure(figsize=figsize)
@@ -246,8 +259,9 @@ def plot_grouped(labels, series, *, colors, series_labels, title, ylabel, decima
         ylabel=ylabel, decimals=decimals, signed=signed,
         bar_width=bar_width, edge_keys=edge_keys,
     )
+    layout_bars(fig, title=title)
     bottom_legend(fig, handles, leg_labels, legend_y=legend_y, ncol=min(len(series), 3))
-    finish(fig, title=title, save_path=save_path, show=show)
+    save_show(fig, save_path=save_path, show=show)
     return fig, ax
 
 
@@ -271,16 +285,17 @@ def stack_bars(ax, pos, df, comps, colors, bar_width, *, alpha=None, hatch_keys=
     return up, dn, handles
 
 
-def net_markers(ax, pos, net, span, *, decimals, signed):
+def net_markers(ax, pos, net, *, decimals, signed):
     """Diamond at the net of a mixed-sign stack, with its value."""
     ax.scatter(pos, net, marker="D", s=42, color=TEXT_COLOR, zorder=6)
     for xx, tv in zip(pos, net):
         ax.annotate(dk_num(tv, decimals=decimals, signed=signed),
-                    (xx, tv + 0.03 * span), ha="center", va="bottom",
+                    (xx, tv), xytext=(0, NET_LABEL_OFFSET_PT), textcoords="offset points",
+                    ha="center", va="bottom",
                     fontsize=10, fontweight="bold", color=TEXT_COLOR, zorder=7)
 
 
-def stack_legend(fig, ax, handles, comps, total_label, *, legend_y):
+def stack_legend(fig, ax, handles, comps, total_label, *, legend_y=None):
     """Legend for a stacked figure: one entry per component plus the net marker."""
     labels = [col_names.get(c, c) for c in comps] + [total_label]
     leg = [handles[c] for c in comps] + [ax.scatter([], [], marker="D", s=42, color=TEXT_COLOR)]

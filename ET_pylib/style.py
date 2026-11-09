@@ -507,11 +507,14 @@ PANEL_EDGE_LW = 0.8
 FIGSIZE_WIDE  = (12, 4)        # house width is always 12
 
 # 1x2 balance figures: gap between the panels (share of axes width), title and legend
-# offsets (inches) and the column cap of the grouped legend.
+# offsets (inches) and the column cap of the grouped legend. The legend gap also applies
+# to the bottom legend of the bar figures.
 PAIR_WSPACE     = 0.06
 TITLE_GAP_IN    = 0.20         # suptitle bottom above the panel titles
 LEGEND_GAP_IN   = 0.12         # legend box top below the lowest x-label (box adds padding)
 LEGEND_MAX_COLS = 5
+
+NET_LABEL_OFFSET_PT = 7        # net-marker value above the diamond (points)
 
 _AEJ_RCPARAMS = {
     "font.family":          "serif",

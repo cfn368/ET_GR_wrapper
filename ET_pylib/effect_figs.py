@@ -30,8 +30,8 @@ from .welfare import (
     producer_profit, producer_generation, welfare_levels, cs_by_price_bin, welfare_by_syscost_gap,
 )
 from .plot_base import (
-    year_label, new_figure, finish, limits, zero_line, style_axes, style_panel, signed_bars,
-    draw_grouped, plot_grouped, bottom_legend, stack_bars, net_markers, stack_legend,
+    year_label, new_figure, finish, layout_bars, save_show, limits, zero_line, style_axes,
+    style_panel, signed_bars, draw_grouped, plot_grouped, bottom_legend, stack_bars, net_markers, stack_legend,
 )
 
 
@@ -237,14 +237,15 @@ def _plot_stacked_states(frames, *, title, ylabel, decimals, figsize, bar_width,
 
     y_lims = limits(np.concatenate(spans), pad_frac=0.18)
     for pos, net in nets:                       # net is not the visual top when signs mix
-        net_markers(ax, pos, net, y_lims[1] - y_lims[0], decimals=decimals, signed=False)
+        net_markers(ax, pos, net, decimals=decimals, signed=False)
 
     ax.set_ylim(*y_lims)
     style_panel(ax, regions, x, ylabel=ylabel)
     if y_lims[0] < 0:
         zero_line(ax)
+    layout_bars(fig, title=title)
     stack_legend(fig, ax, handles, comps, FIG_TEXT["total_label"], legend_y=legend_y)
-    finish(fig, title=title, save_path=save_path, show=show)
+    save_show(fig, save_path=save_path, show=show)
     return fig, ax
 
 
@@ -262,13 +263,14 @@ def _plot_stacked_delta(df, *, title, ylabel, decimals, figsize, bar_width, lege
     up, dn, handles = stack_bars(ax, x, df, comps, colors, bar_width, hatch_keys=hatch_keys)
     total = df[comps].sum(axis=1).to_numpy(dtype=float)
     y_lims = limits(np.concatenate([up, dn]), pad_frac=0.18)
-    net_markers(ax, x, total, y_lims[1] - y_lims[0], decimals=decimals, signed=True)
+    net_markers(ax, x, total, decimals=decimals, signed=True)
 
     ax.set_ylim(*y_lims)
     style_panel(ax, regions, x, ylabel=ylabel)
     zero_line(ax)
+    layout_bars(fig, title=title)
     stack_legend(fig, ax, handles, comps, total_label, legend_y=legend_y)
-    finish(fig, title=title, save_path=save_path, show=show)
+    save_show(fig, save_path=save_path, show=show)
     return fig, ax
 
 
@@ -276,7 +278,7 @@ def _plot_stacked_delta(df, *, title, ylabel, decimals, figsize, bar_width, lege
 # 4. figures: levels
 
 def plot_price_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE,
-                      bar_width=0.38, legend_y=-0.06, decimals=1, save_path=None,
+                      bar_width=0.38, legend_y=None, decimals=1, save_path=None,
                       show=True, verbose=False):
     """Demand-weighted mean price by region, baseline vs. shock, on the context's market."""
     df = price_levels(ctx, regions, years=years) / 10.0   # DKK/MWh -> øre/kWh
@@ -290,7 +292,7 @@ def plot_price_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, figsize=FIGSIZE
 
 
 def plot_trade_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net",
-                      value=False, figsize=FIGSIZE_WIDE, bar_width=0.38, legend_y=-0.06,
+                      value=False, figsize=FIGSIZE_WIDE, bar_width=0.38, legend_y=None,
                       decimals=1, save_path=None, show=True, verbose=False):
     """Net export by region, baseline vs. shock; TWh, or mia. kr. if `value`."""
     title = FIG_TEXT["title_trade_v" if value else "title_trade_q"].format(year=year_label(years))
@@ -309,7 +311,7 @@ def plot_trade_levels(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net"
 def plot_welfare_levels(baseline_output, shock_output, *, id2Pt=None, id2EA=None,
                         regions=None, year=ANALYSIS_YEAR, markets=("E",), cs_scale=1.0,
                         include_ci=True, annuity=None, series=WELFARE_SERIES,
-                        figsize=None, bar_width=None, legend_y=-0.06, decimals=1,
+                        figsize=None, bar_width=None, legend_y=None, decimals=1,
                         save_path=None, show=True):
     """ΔCS, ΔPS and net by region. `include_ci` adds the congestion rent and
     `annuity` the annuitised investment to the net bar; series=WELFARE_SERIES_FULL
@@ -383,7 +385,7 @@ def plot_welfare_by_syscost_gap(block, *, region="DK", gaps=np.arange(0.0, 25.01
 
 def plot_generation_stack(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,
                           year=ANALYSIS_YEAR, market="E", id2HA=None, figsize=FIGSIZE_WIDE,
-                          bar_width=0.38, legend_y=-0.06, decimals=1, save_path=None,
+                          bar_width=0.38, legend_y=None, decimals=1, save_path=None,
                           show=True):
     """Generation (TWh) by plant type, baseline | shock; electricity, or district heat
     with market="H"."""
@@ -399,7 +401,7 @@ def plot_generation_stack(baseline_output, shock_output, *, id2Pt, id2EA=None, r
 
 def plot_profit_stack(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,
                       year=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE, bar_width=0.38,
-                      legend_y=-0.06, decimals=1, save_path=None, show=True):
+                      legend_y=None, decimals=1, save_path=None, show=True):
     """Producer profit (mia. kr.) by plant type, baseline | shock."""
     return _plot_stacked_states(
         profit_by_pt(baseline_output, shock_output, id2Pt=id2Pt, id2EA=id2EA,
@@ -461,7 +463,7 @@ def plot_capture_delta_by_pt(ctx, *, country="DK", years=ANALYSIS_YEAR, figsize=
 
 def plot_trade_delta_by_partner(ctx, regions=None, *, years=ANALYSIS_YEAR, component="net",
                                 value=False, figsize=FIGSIZE_WIDE, bar_width=0.45,
-                                legend_y=-0.1, decimals=1, save_path=None, show=True):
+                                legend_y=None, decimals=1, save_path=None, show=True):
     """Δ net export decomposed by trade partner, one stacked bar per region."""
     return _plot_stacked_delta(
         trade_delta_by_partner(ctx, regions, years=years, component=component, value=value),
@@ -474,7 +476,7 @@ def plot_trade_delta_by_partner(ctx, regions=None, *, years=ANALYSIS_YEAR, compo
 
 
 def plot_nx_delta_by_pt(ctx, share_dict, regions=None, *, years=ANALYSIS_YEAR,
-                        figsize=FIGSIZE_WIDE, bar_width=0.45, legend_y=-0.20, decimals=1,
+                        figsize=FIGSIZE_WIDE, bar_width=0.45, legend_y=None, decimals=1,
                         save_path=None, show=True):
     """Δ net export decomposed by supply component, one stacked bar per region."""
     return _plot_stacked_delta(
@@ -488,7 +490,7 @@ def plot_nx_delta_by_pt(ctx, share_dict, regions=None, *, years=ANALYSIS_YEAR,
 
 def plot_generation_delta(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,
                           year=ANALYSIS_YEAR, market="E", id2HA=None, figsize=FIGSIZE_WIDE,
-                          bar_width=0.45, legend_y=-0.10, decimals=1, save_path=None,
+                          bar_width=0.45, legend_y=None, decimals=1, save_path=None,
                           show=True):
     """Δ generation (TWh) decomposed by plant type; electricity, or district heat with
     market="H"."""
@@ -507,7 +509,7 @@ def plot_generation_delta(baseline_output, shock_output, *, id2Pt, id2EA=None, r
 
 def plot_profit_delta(baseline_output, shock_output, *, id2Pt, id2EA=None, regions=None,
                       year=ANALYSIS_YEAR, figsize=FIGSIZE_WIDE, bar_width=0.45,
-                      legend_y=-0.10, decimals=1, save_path=None, show=True):
+                      legend_y=None, decimals=1, save_path=None, show=True):
     """Δ producer profit (mia. kr.) decomposed by plant type."""
     f = profit_by_pt(baseline_output, shock_output, id2Pt=id2Pt, id2EA=id2EA,
                      regions=regions, year=year)
@@ -523,7 +525,7 @@ def plot_profit_delta(baseline_output, shock_output, *, id2Pt, id2EA=None, regio
 
 def plot_cs_by_price_bin(baseline_output, shock_output, regions=None, *, year=ANALYSIS_YEAR,
                          market="E", n_bins=5, cs_scale=1.0, figsize=FIGSIZE_WIDE,
-                         bar_width=None, legend_y=-0.12, decimals=0, save_path=None,
+                         bar_width=None, legend_y=None, decimals=0, save_path=None,
                          show=True, verbose=False):
     """ΔCS by equal-hour bins of the baseline price (cheapest -> dearest), one series
     per region, on `market`. Bins sum to the ΔCS of `plot_welfare_levels` for that market."""
@@ -544,6 +546,7 @@ def plot_cs_by_price_bin(baseline_output, shock_output, regions=None, *, year=AN
         signed=True, bar_width=bar_width if bar_width else round(0.78 / len(df), 3),
     )
     ax.set_xlabel(FIG_TEXT["price_bin_axis"], loc="left")
+    layout_bars(fig, title=title)
     bottom_legend(fig, handles, leg_labels, legend_y=legend_y, ncol=min(len(df), 4))
-    finish(fig, title=title, save_path=save_path, show=show)
+    save_show(fig, save_path=save_path, show=show)
     return fig, ax

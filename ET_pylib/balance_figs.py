@@ -121,8 +121,8 @@ def _legend_groups(groups, entries):
 def _finish_pair(fig, axes, entries, *, groups, legend_y, legend_max_cols, title, save_path,
                  show):
     """Shared tail of the 1x2 figures: panel frames, layout, title, legend, save, show.
-    `entries` are (series, handle); `groups` splits them under headers, None keeps one block
-    (which needs an explicit `legend_y`)."""
+    `entries` are (series, handle); `groups` splits them under headers, None keeps one block.
+    `legend_y=None` puts the legend just below the x-labels."""
     frame_panels(axes)
     layout_pair(fig, axes, title=title, x=TITLE_X)
     if entries and groups is not None:

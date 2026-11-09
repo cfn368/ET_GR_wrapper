@@ -29,7 +29,8 @@ R, T    = 0.04, 40                   # real discount rate, technical lifetime (y
 EUR_DKK = 7.46                       # fixed-rate peg, mio. kr. per MEUR
 
 PLANT_UNITS = {                      # CAPEX MEUR/MW, lifetime yr, annual FOM as % of CAPEX
-    "Nuclear":      (8*1.15,     60, 164/100),   # ET / FOA / OECD-IEA
+    "Nuclear":      (8
+                     ,     60, 164/100),   # ET / FOA / OECD-IEA
     "WindOffshore": (25/10, 30, 192/100),   # ET / FOA / ET
 }
 PLANT_OWNERS = {                     # technology -> countries carrying the cost

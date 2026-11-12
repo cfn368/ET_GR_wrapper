@@ -8,3 +8,6 @@ ET_intermediate/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# local notes
+ligevaegtspris.md

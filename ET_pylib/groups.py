@@ -233,6 +233,14 @@ _FULL_ORDER_HA  = _META_BUILD_HA + COL_ORDER_HA
 CLAMP_SUPPLY_HA = ("HS", "SH")
 CLAMP_DEMAND_HA = ("HS",)
 
+# Legend groups of the district-heat balance figures; heat demand and CCS heat use
+# are the only demand-side series.
+_HA_LOADS        = ("district_heat", "CCS")
+LEGEND_GROUPS_DH = (
+    ("supply", tuple(c for c in COL_ORDER_HA if c not in _HA_LOADS)),
+    ("demand", _HA_LOADS),
+)
+
 
 # ==================== ==================== ==================== ====================
 # 6. markets: what separates electricity ("E") from district heat ("H")

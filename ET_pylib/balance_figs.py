@@ -17,7 +17,8 @@ import pandas as pd
 from .groups import (
     as_list,
     META_COLS, META_COLS_HA, COL_ORDER, PT_COLS, EA_ORDER, EA_cols, NUCLEAR_PT,
-    STATE_BASE, STATES, c_aggs_countries, LEGEND_GROUPS_EL, LEGEND_GROUPS_NX,
+    STATE_BASE, STATES, c_aggs_countries, LEGEND_GROUPS_EL, LEGEND_GROUPS_DH,
+    LEGEND_GROUPS_NX,
 )
 from .style import (
     FIG_TEXT, STATE_LABELS, LEGEND_MAX_COLS, color_of, label_of, col_names, print_table,
@@ -52,7 +53,7 @@ EL_MARKET = _Market("E", "EA", "pE", "pE_baseline", FIG_TEXT["ylabel_price_el"],
                     LEGEND_GROUPS_EL)
 DH_MARKET = _Market("H", "HA", "pH", "pH_baseline", FIG_TEXT["ylabel_price_dh"],
                     tuple(META_COLS_HA), False, "title_balance_dh",
-                    None)
+                    LEGEND_GROUPS_DH)
 
 
 def _years(years, values):
@@ -234,13 +235,15 @@ def plot_energy_balance_el(ctx, ea, *, years=None, sort_by="pE_baseline", legend
 
 def plot_energy_balance_dh(ctx, ha, *, years=None, sort_by="pH_baseline", legend_min_twh=0.0,
                            figsize=(12, 5), save_path_fmt=None, show=True, verbose=False,
-                           legend_y=-0.2, state_labels=None):
+                           legend_y=None, legend_max_cols=LEGEND_MAX_COLS, state_labels=None):
     """District-heat balance, baseline | shock, for heat area `ha` (or "DK" on a context
-    from `build_el_balance_data_country(..., market="H")`)."""
+    from `build_el_balance_data_country(..., market="H")`); legend grouped into supply
+    and demand."""
     return _plot_balance(ctx, ha, market=DH_MARKET, hatched=set(), years=years,
                          sort_by=sort_by, legend_min_twh=legend_min_twh, figsize=figsize,
                          save_path_fmt=save_path_fmt, show=show, verbose=verbose,
-                         legend_y=legend_y, state_labels=state_labels)
+                         legend_y=legend_y, legend_max_cols=legend_max_cols,
+                         state_labels=state_labels)
 
 
 # ==================== ==================== ==================== ====================
